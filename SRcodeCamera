@@ -1,0 +1,95 @@
+
+local ScreenGui = Instance.new("ScreenGui") do
+	ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+end
+
+local Frame = Instance.new("Frame",ScreenGui) do
+	Frame.BackgroundColor3 = Color3.new(0,0,0)
+	Frame.BackgroundTransparency = 1
+	Frame.BorderColor3 = Color3.new(0,0,0)
+	Frame.BorderSizePixel = 0
+	Frame.Position = UDim2.new(0.127,0,0.07,0)
+	Frame.Size = UDim2.new(0,178,0,62)
+	Frame.Visible = false
+end
+
+local UICorner = Instance.new("UICorner",Frame)
+local Open = Instance.new("TextButton",Frame) do
+	Open.Name = "Open"
+	Open.BackgroundColor3 = Color3.new(1,1,1)
+	Open.BorderColor3 = Color3.new(0,0,0)
+	Open.BorderSizePixel = 0
+	Open.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json",Enum.FontWeight.Bold,Enum.FontStyle.Normal)
+	Open.Position = UDim2.new(-0.18,0,-0.516,0)
+	Open.Size = UDim2.new(0.18,0,0.516,0)
+	Open.Text = "+"
+	Open.TextColor3 = Color3.new(0,0,0)
+	Open.TextScaled = true
+	Open.TextSize = 14
+	Open.TextWrapped = true
+end
+
+local UICorner_1 = Instance.new("UICorner",Open)
+local LocalScript = Instance.new("LocalScript",Open)
+local Frame1 = Instance.new("Frame",ScreenGui) do
+	Frame1.Name = "Frame1"
+	Frame1.BackgroundColor3 = Color3.new(0,0,0)
+	Frame1.BackgroundTransparency = 0.5
+	Frame1.BorderColor3 = Color3.new(0,0,0)
+	Frame1.BorderSizePixel = 0
+	Frame1.Position = UDim2.new(0.127,0,0.07,0)
+	Frame1.Size = UDim2.new(0,178,0,62)
+end
+
+local Close = Instance.new("TextButton",Frame1) do
+	Close.Name = "Close"
+	Close.BackgroundColor3 = Color3.new(1,0,0)
+	Close.BorderColor3 = Color3.new(0,0,0)
+	Close.BorderSizePixel = 0
+	Close.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json",Enum.FontWeight.Bold,Enum.FontStyle.Normal)
+	Close.Position = UDim2.new(1,0,-0.516,0)
+	Close.Size = UDim2.new(0.18,0,0.516,0)
+	Close.Text = "X"
+	Close.TextColor3 = Color3.new(0,0,0)
+	Close.TextScaled = true
+	Close.TextSize = 14
+	Close.TextWrapped = true
+end
+
+local UICorner_2 = Instance.new("UICorner",Close)
+local LocalScript_1 = Instance.new("LocalScript",Close)
+local Go = Instance.new("TextButton",Frame1) do
+	Go.Name = "Go"
+	Go.BackgroundColor3 = Color3.new(1,1,1)
+	Go.BorderColor3 = Color3.new(0,0,0)
+	Go.BorderSizePixel = 0
+	Go.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json",Enum.FontWeight.Bold,Enum.FontStyle.Normal)
+	Go.Position = UDim2.new(0.567,0,0.161,0)
+	Go.Size = UDim2.new(0.433,0,0.661,0)
+	Go.Text = "Go"
+	Go.TextColor3 = Color3.new(0,0,0)
+	Go.TextScaled = true
+	Go.TextSize = 14
+	Go.TextWrapped = true
+end
+
+local UICorner_3 = Instance.new("UICorner",Go)
+local LocalScript_2 = Instance.new("LocalScript",Go)
+local Back = Instance.new("TextButton",Frame1) do
+	Back.Name = "Back"
+	Back.BackgroundColor3 = Color3.new(1,1,1)
+	Back.BorderColor3 = Color3.new(0,0,0)
+	Back.BorderSizePixel = 0
+	Back.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json",Enum.FontWeight.Bold,Enum.FontStyle.Normal)
+	Back.Position = UDim2.new(0,0,0.161,0)
+	Back.Size = UDim2.new(0.433,0,0.661,0)
+	Back.Text = "Back"
+	Back.TextColor3 = Color3.new(0,0,0)
+	Back.TextScaled = true
+	Back.TextSize = 14
+	Back.TextWrapped = true
+end
+
+local UICorner_4 = Instance.new("UICorner",Back)
+local LocalScript_3 = Instance.new("LocalScript",Back)
+local UICorner_5 = Instance.new("UICorner",Frame1)
