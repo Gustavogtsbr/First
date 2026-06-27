@@ -1,3 +1,6 @@
+-- ========================================================= --
+-- PARTE 1: CRIANDO A INTERFACE
+-- ========================================================= --
 
 local ScreenGui = Instance.new("ScreenGui") do
 	ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
@@ -12,8 +15,8 @@ local Frame = Instance.new("Frame",ScreenGui) do
 	Frame.Size = UDim2.new(0,178,0,62)
 	Frame.Visible = false
 end
-
 local UICorner = Instance.new("UICorner",Frame)
+
 local Open = Instance.new("TextButton",Frame) do
 	Open.Name = "Open"
 	Open.BackgroundColor3 = Color3.new(1,1,1)
@@ -28,9 +31,8 @@ local Open = Instance.new("TextButton",Frame) do
 	Open.TextSize = 14
 	Open.TextWrapped = true
 end
-
 local UICorner_1 = Instance.new("UICorner",Open)
-local LocalScript = Instance.new("LocalScript",Open)
+
 local Frame1 = Instance.new("Frame",ScreenGui) do
 	Frame1.Name = "Frame1"
 	Frame1.BackgroundColor3 = Color3.new(0,0,0)
@@ -40,6 +42,7 @@ local Frame1 = Instance.new("Frame",ScreenGui) do
 	Frame1.Position = UDim2.new(0.127,0,0.07,0)
 	Frame1.Size = UDim2.new(0,178,0,62)
 end
+local UICorner_5 = Instance.new("UICorner",Frame1)
 
 local Close = Instance.new("TextButton",Frame1) do
 	Close.Name = "Close"
@@ -55,9 +58,8 @@ local Close = Instance.new("TextButton",Frame1) do
 	Close.TextSize = 14
 	Close.TextWrapped = true
 end
-
 local UICorner_2 = Instance.new("UICorner",Close)
-local LocalScript_1 = Instance.new("LocalScript",Close)
+
 local Go = Instance.new("TextButton",Frame1) do
 	Go.Name = "Go"
 	Go.BackgroundColor3 = Color3.new(1,1,1)
@@ -72,9 +74,8 @@ local Go = Instance.new("TextButton",Frame1) do
 	Go.TextSize = 14
 	Go.TextWrapped = true
 end
-
 local UICorner_3 = Instance.new("UICorner",Go)
-local LocalScript_2 = Instance.new("LocalScript",Go)
+
 local Back = Instance.new("TextButton",Frame1) do
 	Back.Name = "Back"
 	Back.BackgroundColor3 = Color3.new(1,1,1)
@@ -89,7 +90,44 @@ local Back = Instance.new("TextButton",Frame1) do
 	Back.TextSize = 14
 	Back.TextWrapped = true
 end
-
 local UICorner_4 = Instance.new("UICorner",Back)
-local LocalScript_3 = Instance.new("LocalScript",Back)
-local UICorner_5 = Instance.new("UICorner",Frame1)
+
+-- ========================================================= --
+-- PARTE 2: CONFIGURAÇÃO INICIAL
+-- ========================================================= --
+
+ScreenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+-- ========================================================= --
+-- PARTE 3: LÓGICA DOS BOTÕES (CORRIGIDA)
+-- ========================================================= --
+
+-- Botão ABRIR
+Open.MouseButton1Click:Connect(function()
+	Frame.Visible = false
+	Frame1.Visible = true
+end)
+
+-- Botão FECHAR
+Close.MouseButton1Click:Connect(function()
+	Frame1.Visible = false
+	Frame.Visible = true
+end)
+
+-- Botão GO (Câmera Scriptable)
+Go.MouseButton1Click:Connect(function()
+	local camera = workspace.CurrentCamera
+	camera.CameraType = Enum.CameraType.Scriptable
+	camera.CFrame = CFrame.new(-527.827, 95.358, 426.210) * CFrame.Angles(math.rad(37.54), math.rad(32.53), math.rad(0.00))
+end)
+
+-- Botão BACK (Volta para o Personagem)
+Back.MouseButton1Click:Connect(function()
+	local camera = workspace.CurrentCamera
+	local character = player.Character or player.CharacterAdded:Wait()
+	local humanoid = character:WaitForChild("Humanoid")
+	camera.CameraType = Enum.CameraType.Custom
+	camera.CameraSubject = humanoid
+end)
