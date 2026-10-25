@@ -1,0 +1,2682 @@
+-- Script Local em Lua para Roblox - Slap Royale Hub
+-- Interface completa estilo Windows Hub com abas Combat, Items, Player, Safety e Game
+-- Inclui ações: Damage All, Jump off the bus early, Slap Aura, AimBot Tomahawk, Early Collect Items, Collect All Items, Use all permanent items, Player controls, Players ESP, Items ESP, Anti KnockBack e Auto Rejoin Game
+-- Alocação recomendada: StarterPlayerScripts ou StarterGui
+-- AJUSTADO PARA PING ALTO (+200ms): sistema de margem automática por latência
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local StarterGui = game:GetService("StarterGui")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+local GuiService = game:GetService("GuiService")
+local TeleportService = game:GetService("TeleportService")
+local StatsService = game:GetService("Stats")
+
+local LocalPlayer = Players.LocalPlayer
+
+--------------------------------------------------------------------------------
+-- 1. SISTEMA DE PING DINÂMICO (COMPENSAÇÃO DE LATÊNCIA ANTI-KICK)
+--------------------------------------------------------------------------------
+-- Todas as esperas do script foram originalmente calibradas para ~60ms de ping.
+-- Em ping alto, o servidor recebe cada ação atrasada, e o anti-cheat pode te
+-- expulsar por "velocidade/teleporte" fora do padrão. Aqui medimos o ping real
+-- e adicionamos automaticamente uma margem proporcional a TODA espera crítica,
+-- de modo que o servidor registre cada ação antes da próxima.
+
+local PING_BASELINE = 60        -- ping para o qual as esperas base foram calibradas
+local PING_MAX_EXTRA = 0.55     -- teto máximo de margem extra por espera (segundos)
+
+local pingState = {
+    raw = PING_BASELINE,
+    smooth = PING_BASELINE
+}
+
+local function samplePing()
+    local p = 0
+    pcall(function()
+        p = StatsService.Network.ServerStatsItem["Data Ping"]:GetValue()
+    end)
+    if not p or p <= 0 then
+        pcall(function()
+            p = LocalPlayer:GetNetworkPing() * 1000
+        end)
+    end
+    if p and p > 0 then
+        pingState.raw = p
+        pingState.smooth = pingState.smooth + (p - pingState.smooth) * 0.35
+    end
+end
+
+task.spawn(function()
+    while true do
+        samplePing()
+        task.wait(0.5)
+    end
+end)
+
+-- Margem extra (segundos) proporcional ao excesso de ping acima do baseline.
+-- factor controla o quão agressiva é a compensação para cada tipo de ação.
+local function pingExtra(factor)
+    factor = factor or 1.0
+    local excess = math.max(0, pingState.smooth - PING_BASELINE)
+    return math.min((excess / 1000) * factor, PING_MAX_EXTRA)
+end
+
+-- Espera segura: valor base + margem de ping. Substitui os task.wait fixos.
+local function safeWait(base, factor)
+    task.wait(base + pingExtra(factor or 1.0))
+end
+
+--------------------------------------------------------------------------------
+-- 2. SISTEMA DE ARMAZENAMENTO E CONFIGURAÇÕES LOCAIS (FILE I/O)
+--------------------------------------------------------------------------------
+
+local CONFIG_FILE_NAME = "SlapRoyaleHub_ItemsConfig.json"
+
+-- Estrutura de memória para carregar os parâmetros configuráveis pelo usuário
+local itemsConfig = {
+    waitNext = 0.4,       -- Tempo de espera até teleportar para o próximo item
+    waitCollect = 0.15,   -- Tempo de espera para coletar ao teleportar
+    slapAura = false,     -- Estado persistente do Slap Aura (On / Off)
+    aimBotTomahawk = false,-- Estado persistente do AimBot com Tomahawk
+    playersESP = false,   -- Estado persistente do ESP de Jogadores
+    itemsESP = false,     -- Estado persistente do ESP de Itens
+    antiKnockback = false,-- Estado persistente do Anti KnockBack
+    autoRejoin = true,    -- Estado persistente do Auto Rejoin (On por padrão)
+    fastSpeed = false     -- Estado persistente do Fast Speed
+}
+
+-- Leitura e parsing de configurações persistentes salvas na memória física do dispositivo
+local function loadLocalConfig()
+    pcall(function()
+        if readfile and isfile and isfile(CONFIG_FILE_NAME) then
+            local fileData = readfile(CONFIG_FILE_NAME)
+            local decoded = HttpService:JSONDecode(fileData)
+            if type(decoded) == "table" then
+                if type(decoded.waitNext) == "number" and decoded.waitNext > 0 then
+                    itemsConfig.waitNext = decoded.waitNext
+                end
+                if type(decoded.waitCollect) == "number" and decoded.waitCollect > 0 then
+                    itemsConfig.waitCollect = decoded.waitCollect
+                end
+                if type(decoded.slapAura) == "boolean" then
+                    itemsConfig.slapAura = decoded.slapAura
+                end
+                if type(decoded.aimBotTomahawk) == "boolean" then
+                    itemsConfig.aimBotTomahawk = decoded.aimBotTomahawk
+                end
+                if type(decoded.playersESP) == "boolean" then
+                    itemsConfig.playersESP = decoded.playersESP
+                end
+                if type(decoded.itemsESP) == "boolean" then
+                    itemsConfig.itemsESP = decoded.itemsESP
+                end
+                if type(decoded.antiKnockback) == "boolean" then
+                    itemsConfig.antiKnockback = decoded.antiKnockback
+                end
+                if type(decoded.autoRejoin) == "boolean" then
+                    itemsConfig.autoRejoin = decoded.autoRejoin
+                end
+                if type(decoded.fastSpeed) == "boolean" then
+                    itemsConfig.fastSpeed = decoded.fastSpeed
+                end
+            end
+        end
+    end)
+end
+
+-- Gravação síncrona do estado das configurações em formato JSON
+local function saveLocalConfig()
+    pcall(function()
+        if writefile then
+            local dataToSave = HttpService:JSONEncode(itemsConfig)
+            writefile(CONFIG_FILE_NAME, dataToSave)
+        end
+    end)
+end
+
+loadLocalConfig()
+
+--------------------------------------------------------------------------------
+-- 3. ESTRUTURA PRINCIPAL DA INTERFACE GRÁFICA (WINDOWS HUB)
+--------------------------------------------------------------------------------
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "SlapRoyaleHubGui"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+-- Janela Principal (Main Window Frame)
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 480, 0, 310)
+mainFrame.Position = UDim2.new(0.5, -240, 0.5, -155)
+mainFrame.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+mainFrame.BorderSizePixel = 0
+mainFrame.ClipsDescendants = true
+mainFrame.Parent = screenGui
+
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 8)
+mainCorner.Parent = mainFrame
+
+local mainStroke = Instance.new("UIStroke")
+mainStroke.Thickness = 1.5
+mainStroke.Color = Color3.fromRGB(60, 60, 80)
+mainStroke.Parent = mainFrame
+
+-- Barra de Título Superior (Windows Title Bar)
+local topBar = Instance.new("Frame")
+topBar.Name = "TopBar"
+topBar.Size = UDim2.new(1, 0, 0, 32)
+topBar.Position = UDim2.new(0, 0, 0, 0)
+topBar.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
+topBar.BorderSizePixel = 0
+topBar.Parent = mainFrame
+
+local topBarCorner = Instance.new("UICorner")
+topBarCorner.CornerRadius = UDim.new(0, 8)
+topBarCorner.Parent = topBar
+
+-- Título da Janela
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Name = "TitleLabel"
+titleLabel.Size = UDim2.new(0, 200, 1, 0)
+titleLabel.Position = UDim2.new(0, 12, 0, 0)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text = "SlapRoyale Hub"
+titleLabel.TextColor3 = Color3.fromRGB(220, 220, 240)
+titleLabel.TextSize = 14
+titleLabel.Font = Enum.Font.SourceSansBold
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.Parent = topBar
+
+-- Indicador de Ping (verde/amarelo/vermelho)
+local pingLabel = Instance.new("TextLabel")
+pingLabel.Name = "PingLabel"
+pingLabel.Size = UDim2.new(0, 92, 1, 0)
+pingLabel.Position = UDim2.new(1, -158, 0, 0)
+pingLabel.BackgroundTransparency = 1
+pingLabel.Text = "Ping: -- ms"
+pingLabel.TextColor3 = Color3.fromRGB(150, 200, 150)
+pingLabel.TextSize = 12
+pingLabel.Font = Enum.Font.SourceSansBold
+pingLabel.TextXAlignment = Enum.TextXAlignment.Right
+pingLabel.Parent = topBar
+
+task.spawn(function()
+    while pingLabel.Parent do
+        local p = math.floor(pingState.smooth + 0.5)
+        pingLabel.Text = "Ping: " .. p .. " ms"
+        if p >= 200 then
+            pingLabel.TextColor3 = Color3.fromRGB(240, 120, 120)
+        elseif p >= 120 then
+            pingLabel.TextColor3 = Color3.fromRGB(240, 210, 120)
+        else
+            pingLabel.TextColor3 = Color3.fromRGB(150, 200, 150)
+        end
+        task.wait(0.5)
+    end
+end)
+
+-- Botão Minimizar (-)
+local minimizeButton = Instance.new("TextButton")
+minimizeButton.Name = "MinimizeButton"
+minimizeButton.Size = UDim2.new(0, 32, 0, 32)
+minimizeButton.Position = UDim2.new(1, -64, 0, 0)
+minimizeButton.BackgroundTransparency = 1
+minimizeButton.Text = "-"
+minimizeButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+minimizeButton.TextSize = 18
+minimizeButton.Font = Enum.Font.SourceSansBold
+minimizeButton.Parent = topBar
+
+-- Botão Fechar (X)
+local closeButton = Instance.new("TextButton")
+closeButton.Name = "CloseButton"
+closeButton.Size = UDim2.new(0, 32, 0, 32)
+closeButton.Position = UDim2.new(1, -32, 0, 0)
+closeButton.BackgroundTransparency = 1
+closeButton.Text = "X"
+closeButton.TextColor3 = Color3.fromRGB(240, 80, 80)
+closeButton.TextSize = 14
+closeButton.Font = Enum.Font.SourceSansBold
+closeButton.Parent = topBar
+
+--------------------------------------------------------------------------------
+-- 3B. BOTÃO FLUTUANTE MINIMIZADO (SY)
+--------------------------------------------------------------------------------
+
+local syButton = Instance.new("TextButton")
+syButton.Name = "SYButton"
+syButton.Size = UDim2.new(0, 50, 0, 50)
+syButton.Position = UDim2.new(0.05, 0, 0.2, 0)
+syButton.BackgroundColor3 = Color3.fromRGB(45, 35, 65)
+syButton.Text = "SY"
+syButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+syButton.TextSize = 16
+syButton.Font = Enum.Font.SourceSansBold
+syButton.Visible = false
+syButton.Parent = screenGui
+
+local syCorner = Instance.new("UICorner")
+syCorner.CornerRadius = UDim.new(1, 0)
+syCorner.Parent = syButton
+
+local syStroke = Instance.new("UIStroke")
+syStroke.Thickness = 2
+syStroke.Color = Color3.fromRGB(120, 90, 180)
+syStroke.Parent = syButton
+
+--------------------------------------------------------------------------------
+-- 4. PAINEL DE NAVEGAÇÃO LATERAL E ÁREA DE CONTEÚDO
+--------------------------------------------------------------------------------
+
+-- Menu Lateral (Sidebar)
+local sidebar = Instance.new("Frame")
+sidebar.Name = "Sidebar"
+sidebar.Size = UDim2.new(0, 110, 1, -32)
+sidebar.Position = UDim2.new(0, 0, 0, 32)
+sidebar.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
+sidebar.BorderSizePixel = 0
+sidebar.Parent = mainFrame
+
+local btnCombatCategory = Instance.new("TextButton")
+btnCombatCategory.Name = "BtnCombatCategory"
+btnCombatCategory.Size = UDim2.new(1, -12, 0, 34)
+btnCombatCategory.Position = UDim2.new(0, 6, 0, 10)
+btnCombatCategory.BackgroundColor3 = Color3.fromRGB(55, 55, 75)
+btnCombatCategory.Text = "Combat"
+btnCombatCategory.TextColor3 = Color3.fromRGB(255, 255, 255)
+btnCombatCategory.TextSize = 13
+btnCombatCategory.Font = Enum.Font.SourceSansBold
+btnCombatCategory.Parent = sidebar
+
+local combatCatCorner = Instance.new("UICorner")
+combatCatCorner.CornerRadius = UDim.new(0, 6)
+combatCatCorner.Parent = btnCombatCategory
+
+local btnItemsCategory = Instance.new("TextButton")
+btnItemsCategory.Name = "BtnItemsCategory"
+btnItemsCategory.Size = UDim2.new(1, -12, 0, 34)
+btnItemsCategory.Position = UDim2.new(0, 6, 0, 50)
+btnItemsCategory.BackgroundColor3 = Color3.fromRGB(38, 38, 50)
+btnItemsCategory.Text = "Items"
+btnItemsCategory.TextColor3 = Color3.fromRGB(200, 200, 220)
+btnItemsCategory.TextSize = 13
+btnItemsCategory.Font = Enum.Font.SourceSansBold
+btnItemsCategory.Parent = sidebar
+
+local itemsCatCorner = Instance.new("UICorner")
+itemsCatCorner.CornerRadius = UDim.new(0, 6)
+itemsCatCorner.Parent = btnItemsCategory
+
+local btnPlayerCategory = Instance.new("TextButton")
+btnPlayerCategory.Name = "BtnPlayerCategory"
+btnPlayerCategory.Size = UDim2.new(1, -12, 0, 34)
+btnPlayerCategory.Position = UDim2.new(0, 6, 0, 90)
+btnPlayerCategory.BackgroundColor3 = Color3.fromRGB(38, 38, 50)
+btnPlayerCategory.Text = "Player"
+btnPlayerCategory.TextColor3 = Color3.fromRGB(200, 200, 220)
+btnPlayerCategory.TextSize = 13
+btnPlayerCategory.Font = Enum.Font.SourceSansBold
+btnPlayerCategory.Parent = sidebar
+
+local playerCatCorner = Instance.new("UICorner")
+playerCatCorner.CornerRadius = UDim.new(0, 6)
+playerCatCorner.Parent = btnPlayerCategory
+
+local btnSafetyCategory = Instance.new("TextButton")
+btnSafetyCategory.Name = "BtnSafetyCategory"
+btnSafetyCategory.Size = UDim2.new(1, -12, 0, 34)
+btnSafetyCategory.Position = UDim2.new(0, 6, 0, 130)
+btnSafetyCategory.BackgroundColor3 = Color3.fromRGB(38, 38, 50)
+btnSafetyCategory.Text = "Safety"
+btnSafetyCategory.TextColor3 = Color3.fromRGB(200, 200, 220)
+btnSafetyCategory.TextSize = 13
+btnSafetyCategory.Font = Enum.Font.SourceSansBold
+btnSafetyCategory.Parent = sidebar
+
+local safetyCatCorner = Instance.new("UICorner")
+safetyCatCorner.CornerRadius = UDim.new(0, 6)
+safetyCatCorner.Parent = btnSafetyCategory
+
+local btnGameCategory = Instance.new("TextButton")
+btnGameCategory.Name = "BtnGameCategory"
+btnGameCategory.Size = UDim2.new(1, -12, 0, 34)
+btnGameCategory.Position = UDim2.new(0, 6, 0, 170)
+btnGameCategory.BackgroundColor3 = Color3.fromRGB(38, 38, 50)
+btnGameCategory.Text = "Game"
+btnGameCategory.TextColor3 = Color3.fromRGB(200, 200, 220)
+btnGameCategory.TextSize = 13
+btnGameCategory.Font = Enum.Font.SourceSansBold
+btnGameCategory.Parent = sidebar
+
+local gameCatCorner = Instance.new("UICorner")
+gameCatCorner.CornerRadius = UDim.new(0, 6)
+gameCatCorner.Parent = btnGameCategory
+
+-- Área de Conteúdo Direita (Content Container)
+local contentFrame = Instance.new("Frame")
+contentFrame.Name = "ContentFrame"
+contentFrame.Size = UDim2.new(1, -110, 1, -32)
+contentFrame.Position = UDim2.new(0, 110, 0, 32)
+contentFrame.BackgroundTransparency = 1
+contentFrame.Parent = mainFrame
+
+--------------------------------------------------------------------------------
+-- 4A. PAINEL DE COMBAT (COMBAT FRAME - SCROLLING)
+--------------------------------------------------------------------------------
+
+local combatFrame = Instance.new("ScrollingFrame")
+combatFrame.Name = "CombatFrame"
+combatFrame.Size = UDim2.new(1, 0, 1, 0)
+combatFrame.BackgroundTransparency = 1
+combatFrame.Visible = true
+combatFrame.ScrollBarThickness = 4
+combatFrame.CanvasSize = UDim2.new(0, 0, 0, 500)
+combatFrame.Parent = contentFrame
+
+-- Cartão 1: Damage All
+local cardFrame = Instance.new("Frame")
+cardFrame.Name = "DamageAllCard"
+cardFrame.Size = UDim2.new(1, -20, 0, 110)
+cardFrame.Position = UDim2.new(0, 10, 0, 10)
+cardFrame.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+cardFrame.BorderSizePixel = 0
+cardFrame.Parent = combatFrame
+
+local cardCorner = Instance.new("UICorner")
+cardCorner.CornerRadius = UDim.new(0, 6)
+cardCorner.Parent = cardFrame
+
+local cardStroke = Instance.new("UIStroke")
+cardStroke.Thickness = 1
+cardStroke.Color = Color3.fromRGB(50, 50, 70)
+cardStroke.Parent = cardFrame
+
+local cardTitle = Instance.new("TextLabel")
+cardTitle.Name = "CardTitle"
+cardTitle.Size = UDim2.new(1, -80, 0, 22)
+cardTitle.Position = UDim2.new(0, 10, 0, 8)
+cardTitle.BackgroundTransparency = 1
+cardTitle.Text = "Damage All"
+cardTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+cardTitle.TextSize = 14
+cardTitle.Font = Enum.Font.SourceSansBold
+cardTitle.TextXAlignment = Enum.TextXAlignment.Left
+cardTitle.Parent = cardFrame
+
+local cardDesc = Instance.new("TextLabel")
+cardDesc.Name = "CardDesc"
+cardDesc.Size = UDim2.new(1, -20, 0, 68)
+cardDesc.Position = UDim2.new(0, 10, 0, 32)
+cardDesc.BackgroundTransparency = 1
+cardDesc.Text = "Only use this when there are 3 seconds left in the countdown, if you are equipping the Pow glove. Timing is auto-compensated for high ping."
+cardDesc.TextColor3 = Color3.fromRGB(170, 170, 190)
+cardDesc.TextSize = 11
+cardDesc.Font = Enum.Font.SourceSans
+cardDesc.TextWrapped = true
+cardDesc.TextXAlignment = Enum.TextXAlignment.Left
+cardDesc.TextYAlignment = Enum.TextYAlignment.Top
+cardDesc.Parent = cardFrame
+
+local toggleButton = Instance.new("TextButton")
+toggleButton.Name = "ToggleButton"
+toggleButton.Size = UDim2.new(0, 60, 0, 24)
+toggleButton.Position = UDim2.new(1, -70, 0, 8)
+toggleButton.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+toggleButton.Text = "Off"
+toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleButton.TextSize = 12
+toggleButton.Font = Enum.Font.SourceSansBold
+toggleButton.Parent = cardFrame
+
+local toggleCorner = Instance.new("UICorner")
+toggleCorner.CornerRadius = UDim.new(0, 4)
+toggleCorner.Parent = toggleButton
+
+-- Cartão 2: Jump off the bus early
+local cardJump = Instance.new("Frame")
+cardJump.Name = "JumpOffBusCard"
+cardJump.Size = UDim2.new(1, -20, 0, 110)
+cardJump.Position = UDim2.new(0, 10, 0, 130)
+cardJump.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+cardJump.BorderSizePixel = 0
+cardJump.Parent = combatFrame
+
+local cardJumpCorner = Instance.new("UICorner")
+cardJumpCorner.CornerRadius = UDim.new(0, 6)
+cardJumpCorner.Parent = cardJump
+
+local cardJumpStroke = Instance.new("UIStroke")
+cardJumpStroke.Thickness = 1
+cardJumpStroke.Color = Color3.fromRGB(50, 50, 70)
+cardJumpStroke.Parent = cardJump
+
+local cardJumpTitle = Instance.new("TextLabel")
+cardJumpTitle.Name = "CardJumpTitle"
+cardJumpTitle.Size = UDim2.new(1, -80, 0, 22)
+cardJumpTitle.Position = UDim2.new(0, 10, 0, 8)
+cardJumpTitle.BackgroundTransparency = 1
+cardJumpTitle.Text = "Jump off the bus early"
+cardJumpTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+cardJumpTitle.TextSize = 14
+cardJumpTitle.Font = Enum.Font.SourceSansBold
+cardJumpTitle.TextXAlignment = Enum.TextXAlignment.Left
+cardJumpTitle.Parent = cardJump
+
+local cardJumpDesc = Instance.new("TextLabel")
+cardJumpDesc.Name = "CardJumpDesc"
+cardJumpDesc.Size = UDim2.new(1, -20, 0, 68)
+cardJumpDesc.Position = UDim2.new(0, 10, 0, 32)
+cardJumpDesc.BackgroundTransparency = 1
+cardJumpDesc.Text = "Jump off the bus before the other players. Don't do it too obviously."
+cardJumpDesc.TextColor3 = Color3.fromRGB(170, 170, 190)
+cardJumpDesc.TextSize = 11
+cardJumpDesc.Font = Enum.Font.SourceSans
+cardJumpDesc.TextWrapped = true
+cardJumpDesc.TextXAlignment = Enum.TextXAlignment.Left
+cardJumpDesc.TextYAlignment = Enum.TextYAlignment.Top
+cardJumpDesc.Parent = cardJump
+
+local runJumpButton = Instance.new("TextButton")
+runJumpButton.Name = "RunJumpButton"
+runJumpButton.Size = UDim2.new(0, 60, 0, 24)
+runJumpButton.Position = UDim2.new(1, -70, 0, 8)
+runJumpButton.BackgroundColor3 = Color3.fromRGB(70, 55, 95)
+runJumpButton.Text = "Run"
+runJumpButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+runJumpButton.TextSize = 12
+runJumpButton.Font = Enum.Font.SourceSansBold
+runJumpButton.Parent = cardJump
+
+local runJumpCorner = Instance.new("UICorner")
+runJumpCorner.CornerRadius = UDim.new(0, 4)
+runJumpCorner.Parent = runJumpButton
+
+-- Cartão 3: Slap Aura
+local cardSlapAura = Instance.new("Frame")
+cardSlapAura.Name = "SlapAuraCard"
+cardSlapAura.Size = UDim2.new(1, -20, 0, 110)
+cardSlapAura.Position = UDim2.new(0, 10, 0, 250)
+cardSlapAura.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+cardSlapAura.BorderSizePixel = 0
+cardSlapAura.Parent = combatFrame
+
+local cardSlapAuraCorner = Instance.new("UICorner")
+cardSlapAuraCorner.CornerRadius = UDim.new(0, 6)
+cardSlapAuraCorner.Parent = cardSlapAura
+
+local cardSlapAuraStroke = Instance.new("UIStroke")
+cardSlapAuraStroke.Thickness = 1
+cardSlapAuraStroke.Color = Color3.fromRGB(50, 50, 70)
+cardSlapAuraStroke.Parent = cardSlapAura
+
+local cardSlapAuraTitle = Instance.new("TextLabel")
+cardSlapAuraTitle.Name = "CardSlapAuraTitle"
+cardSlapAuraTitle.Size = UDim2.new(1, -80, 0, 22)
+cardSlapAuraTitle.Position = UDim2.new(0, 10, 0, 8)
+cardSlapAuraTitle.BackgroundTransparency = 1
+cardSlapAuraTitle.Text = "Slap Aura"
+cardSlapAuraTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+cardSlapAuraTitle.TextSize = 14
+cardSlapAuraTitle.Font = Enum.Font.SourceSansBold
+cardSlapAuraTitle.TextXAlignment = Enum.TextXAlignment.Left
+cardSlapAuraTitle.Parent = cardSlapAura
+
+local cardSlapAuraDesc = Instance.new("TextLabel")
+cardSlapAuraDesc.Name = "CardSlapAuraDesc"
+cardSlapAuraDesc.Size = UDim2.new(1, -20, 0, 68)
+cardSlapAuraDesc.Position = UDim2.new(0, 10, 0, 32)
+cardSlapAuraDesc.BackgroundTransparency = 1
+cardSlapAuraDesc.Text = "Perform an automatic, cooldown-free slap on people near you. Cooldown auto-scales with ping."
+cardSlapAuraDesc.TextColor3 = Color3.fromRGB(170, 170, 190)
+cardSlapAuraDesc.TextSize = 11
+cardSlapAuraDesc.Font = Enum.Font.SourceSans
+cardSlapAuraDesc.TextWrapped = true
+cardSlapAuraDesc.TextXAlignment = Enum.TextXAlignment.Left
+cardSlapAuraDesc.TextYAlignment = Enum.TextYAlignment.Top
+cardSlapAuraDesc.Parent = cardSlapAura
+
+local toggleSlapAuraBtn = Instance.new("TextButton")
+toggleSlapAuraBtn.Name = "ToggleSlapAuraBtn"
+toggleSlapAuraBtn.Size = UDim2.new(0, 60, 0, 24)
+toggleSlapAuraBtn.Position = UDim2.new(1, -70, 0, 8)
+toggleSlapAuraBtn.BackgroundColor3 = itemsConfig.slapAura and Color3.fromRGB(50, 180, 80) or Color3.fromRGB(180, 50, 50)
+toggleSlapAuraBtn.Text = itemsConfig.slapAura and "On" or "Off"
+toggleSlapAuraBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleSlapAuraBtn.TextSize = 12
+toggleSlapAuraBtn.Font = Enum.Font.SourceSansBold
+toggleSlapAuraBtn.Parent = cardSlapAura
+
+local toggleSlapAuraCorner = Instance.new("UICorner")
+toggleSlapAuraCorner.CornerRadius = UDim.new(0, 4)
+toggleSlapAuraCorner.Parent = toggleSlapAuraBtn
+
+-- Cartão 4: AimBot Tomahawk
+local cardAimBot = Instance.new("Frame")
+cardAimBot.Name = "AimBotTomahawkCard"
+cardAimBot.Size = UDim2.new(1, -20, 0, 110)
+cardAimBot.Position = UDim2.new(0, 10, 0, 370)
+cardAimBot.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+cardAimBot.BorderSizePixel = 0
+cardAimBot.Parent = combatFrame
+
+local cardAimBotCorner = Instance.new("UICorner")
+cardAimBotCorner.CornerRadius = UDim.new(0, 6)
+cardAimBotCorner.Parent = cardAimBot
+
+local cardAimBotStroke = Instance.new("UIStroke")
+cardAimBotStroke.Thickness = 1
+cardAimBotStroke.Color = Color3.fromRGB(50, 50, 70)
+cardAimBotStroke.Parent = cardAimBot
+
+local cardAimBotTitle = Instance.new("TextLabel")
+cardAimBotTitle.Name = "CardAimBotTitle"
+cardAimBotTitle.Size = UDim2.new(1, -80, 0, 22)
+cardAimBotTitle.Position = UDim2.new(0, 10, 0, 8)
+cardAimBotTitle.BackgroundTransparency = 1
+cardAimBotTitle.Text = "AimBot Tomahawk"
+cardAimBotTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+cardAimBotTitle.TextSize = 14
+cardAimBotTitle.Font = Enum.Font.SourceSansBold
+cardAimBotTitle.TextXAlignment = Enum.TextXAlignment.Left
+cardAimBotTitle.Parent = cardAimBot
+
+local cardAimBotDesc = Instance.new("TextLabel")
+cardAimBotDesc.Name = "CardAimBotDesc"
+cardAimBotDesc.Size = UDim2.new(1, -20, 0, 68)
+cardAimBotDesc.Position = UDim2.new(0, 10, 0, 32)
+cardAimBotDesc.BackgroundTransparency = 1
+cardAimBotDesc.Text = "Enters AimBot mode while equipped with Tomahawk."
+cardAimBotDesc.TextColor3 = Color3.fromRGB(170, 170, 190)
+cardAimBotDesc.TextSize = 11
+cardAimBotDesc.Font = Enum.Font.SourceSans
+cardAimBotDesc.TextWrapped = true
+cardAimBotDesc.TextXAlignment = Enum.TextXAlignment.Left
+cardAimBotDesc.TextYAlignment = Enum.TextYAlignment.Top
+cardAimBotDesc.Parent = cardAimBot
+
+local toggleAimBotBtn = Instance.new("TextButton")
+toggleAimBotBtn.Name = "ToggleAimBotBtn"
+toggleAimBotBtn.Size = UDim2.new(0, 60, 0, 24)
+toggleAimBotBtn.Position = UDim2.new(1, -70, 0, 8)
+toggleAimBotBtn.BackgroundColor3 = itemsConfig.aimBotTomahawk and Color3.fromRGB(50, 180, 80) or Color3.fromRGB(180, 50, 50)
+toggleAimBotBtn.Text = itemsConfig.aimBotTomahawk and "On" or "Off"
+toggleAimBotBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleAimBotBtn.TextSize = 12
+toggleAimBotBtn.Font = Enum.Font.SourceSansBold
+toggleAimBotBtn.Parent = cardAimBot
+
+local toggleAimBotCorner = Instance.new("UICorner")
+toggleAimBotCorner.CornerRadius = UDim.new(0, 4)
+toggleAimBotCorner.Parent = toggleAimBotBtn
+
+--------------------------------------------------------------------------------
+-- 4B. PAINEL DE ITEMS (ITEMS FRAME - EXPANDIDO)
+--------------------------------------------------------------------------------
+
+local itemsFrame = Instance.new("ScrollingFrame")
+itemsFrame.Name = "ItemsFrame"
+itemsFrame.Size = UDim2.new(1, 0, 1, 0)
+itemsFrame.BackgroundTransparency = 1
+itemsFrame.Visible = false
+itemsFrame.ScrollBarThickness = 4
+itemsFrame.CanvasSize = UDim2.new(0, 0, 0, 450)
+itemsFrame.Parent = contentFrame
+
+-- Cartão 1: Early Collect Items
+local cardItems = Instance.new("Frame")
+cardItems.Name = "EarlyCollectCard"
+cardItems.Size = UDim2.new(1, -20, 0, 110)
+cardItems.Position = UDim2.new(0, 10, 0, 10)
+cardItems.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+cardItems.BorderSizePixel = 0
+cardItems.Parent = itemsFrame
+
+local cardItemsCorner = Instance.new("UICorner")
+cardItemsCorner.CornerRadius = UDim.new(0, 6)
+cardItemsCorner.Parent = cardItems
+
+local cardItemsStroke = Instance.new("UIStroke")
+cardItemsStroke.Thickness = 1
+cardItemsStroke.Color = Color3.fromRGB(50, 50, 70)
+cardItemsStroke.Parent = cardItems
+
+local cardItemsTitle = Instance.new("TextLabel")
+cardItemsTitle.Name = "CardItemsTitle"
+cardItemsTitle.Size = UDim2.new(1, -80, 0, 22)
+cardItemsTitle.Position = UDim2.new(0, 10, 0, 8)
+cardItemsTitle.BackgroundTransparency = 1
+cardItemsTitle.Text = "Early Collect Items"
+cardItemsTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+cardItemsTitle.TextSize = 14
+cardItemsTitle.Font = Enum.Font.SourceSansBold
+cardItemsTitle.TextXAlignment = Enum.TextXAlignment.Left
+cardItemsTitle.Parent = cardItems
+
+local cardItemsDesc = Instance.new("TextLabel")
+cardItemsDesc.Name = "CardItemsDesc"
+cardItemsDesc.Size = UDim2.new(1, -20, 0, 68)
+cardItemsDesc.Position = UDim2.new(0, 10, 0, 32)
+cardItemsDesc.BackgroundTransparency = 1
+cardItemsDesc.Text = "Collect the items early, only activate this when there are about 3 seconds left in the countdown. Teleport waits auto-add ping margin."
+cardItemsDesc.TextColor3 = Color3.fromRGB(170, 170, 190)
+cardItemsDesc.TextSize = 11
+cardItemsDesc.Font = Enum.Font.SourceSans
+cardItemsDesc.TextWrapped = true
+cardItemsDesc.TextXAlignment = Enum.TextXAlignment.Left
+cardItemsDesc.TextYAlignment = Enum.TextYAlignment.Top
+cardItemsDesc.Parent = cardItems
+
+local toggleItemsButton = Instance.new("TextButton")
+toggleItemsButton.Name = "ToggleItemsButton"
+toggleItemsButton.Size = UDim2.new(0, 60, 0, 24)
+toggleItemsButton.Position = UDim2.new(1, -70, 0, 8)
+toggleItemsButton.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+toggleItemsButton.Text = "Off"
+toggleItemsButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleItemsButton.TextSize = 12
+toggleItemsButton.Font = Enum.Font.SourceSansBold
+toggleItemsButton.Parent = cardItems
+
+local toggleItemsCorner = Instance.new("UICorner")
+toggleItemsCorner.CornerRadius = UDim.new(0, 4)
+toggleItemsCorner.Parent = toggleItemsButton
+
+-- Cartão 2: Collect all Items
+local cardCollectAll = Instance.new("Frame")
+cardCollectAll.Name = "CollectAllCard"
+cardCollectAll.Size = UDim2.new(1, -20, 0, 110)
+cardCollectAll.Position = UDim2.new(0, 10, 0, 130)
+cardCollectAll.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+cardCollectAll.BorderSizePixel = 0
+cardCollectAll.Parent = itemsFrame
+
+local cardCollectAllCorner = Instance.new("UICorner")
+cardCollectAllCorner.CornerRadius = UDim.new(0, 6)
+cardCollectAllCorner.Parent = cardCollectAll
+
+local cardCollectAllStroke = Instance.new("UIStroke")
+cardCollectAllStroke.Thickness = 1
+cardCollectAllStroke.Color = Color3.fromRGB(50, 50, 70)
+cardCollectAllStroke.Parent = cardCollectAll
+
+local cardCollectAllTitle = Instance.new("TextLabel")
+cardCollectAllTitle.Name = "CardCollectAllTitle"
+cardCollectAllTitle.Size = UDim2.new(1, -80, 0, 22)
+cardCollectAllTitle.Position = UDim2.new(0, 10, 0, 8)
+cardCollectAllTitle.BackgroundTransparency = 1
+cardCollectAllTitle.Text = "Collect all Items"
+cardCollectAllTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+cardCollectAllTitle.TextSize = 14
+cardCollectAllTitle.Font = Enum.Font.SourceSansBold
+cardCollectAllTitle.TextXAlignment = Enum.TextXAlignment.Left
+cardCollectAllTitle.Parent = cardCollectAll
+
+local cardCollectAllDesc = Instance.new("TextLabel")
+cardCollectAllDesc.Name = "CardCollectAllDesc"
+cardCollectAllDesc.Size = UDim2.new(1, -20, 0, 68)
+cardCollectAllDesc.Position = UDim2.new(0, 10, 0, 32)
+cardCollectAllDesc.BackgroundTransparency = 1
+cardCollectAllDesc.Text = "Collect all items without the countdown. Don't use this as an early item collection tool or you'll get kicked out."
+cardCollectAllDesc.TextColor3 = Color3.fromRGB(170, 170, 190)
+cardCollectAllDesc.TextSize = 11
+cardCollectAllDesc.Font = Enum.Font.SourceSans
+cardCollectAllDesc.TextWrapped = true
+cardCollectAllDesc.TextXAlignment = Enum.TextXAlignment.Left
+cardCollectAllDesc.TextYAlignment = Enum.TextYAlignment.Top
+cardCollectAllDesc.Parent = cardCollectAll
+
+local toggleCollectAllBtn = Instance.new("TextButton")
+toggleCollectAllBtn.Name = "ToggleCollectAllBtn"
+toggleCollectAllBtn.Size = UDim2.new(0, 60, 0, 24)
+toggleCollectAllBtn.Position = UDim2.new(1, -70, 0, 8)
+toggleCollectAllBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+toggleCollectAllBtn.Text = "Off"
+toggleCollectAllBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleCollectAllBtn.TextSize = 12
+toggleCollectAllBtn.Font = Enum.Font.SourceSansBold
+toggleCollectAllBtn.Parent = cardCollectAll
+
+local toggleCollectAllCorner = Instance.new("UICorner")
+toggleCollectAllCorner.CornerRadius = UDim.new(0, 4)
+toggleCollectAllCorner.Parent = toggleCollectAllBtn
+
+-- Cartão 3: Use all permanent items
+local cardUseAll = Instance.new("Frame")
+cardUseAll.Name = "UseAllCard"
+cardUseAll.Size = UDim2.new(1, -20, 0, 50)
+cardUseAll.Position = UDim2.new(0, 10, 0, 250)
+cardUseAll.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+cardUseAll.BorderSizePixel = 0
+cardUseAll.Parent = itemsFrame
+
+local cardUseAllCorner = Instance.new("UICorner")
+cardUseAllCorner.CornerRadius = UDim.new(0, 6)
+cardUseAllCorner.Parent = cardUseAll
+
+local cardUseAllStroke = Instance.new("UIStroke")
+cardUseAllStroke.Thickness = 1
+cardUseAllStroke.Color = Color3.fromRGB(50, 50, 70)
+cardUseAllStroke.Parent = cardUseAll
+
+local cardUseAllTitle = Instance.new("TextLabel")
+cardUseAllTitle.Name = "CardUseAllTitle"
+cardUseAllTitle.Size = UDim2.new(1, -80, 1, 0)
+cardUseAllTitle.Position = UDim2.new(0, 10, 0, 0)
+cardUseAllTitle.BackgroundTransparency = 1
+cardUseAllTitle.Text = "Use all permanent items"
+cardUseAllTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+cardUseAllTitle.TextSize = 14
+cardUseAllTitle.Font = Enum.Font.SourceSansBold
+cardUseAllTitle.TextXAlignment = Enum.TextXAlignment.Left
+cardUseAllTitle.Parent = cardUseAll
+
+local runUseAllBtn = Instance.new("TextButton")
+runUseAllBtn.Name = "RunUseAllBtn"
+runUseAllBtn.Size = UDim2.new(0, 60, 0, 24)
+runUseAllBtn.Position = UDim2.new(1, -70, 0.5, -12)
+runUseAllBtn.BackgroundColor3 = Color3.fromRGB(70, 55, 95)
+runUseAllBtn.Text = "Run"
+runUseAllBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+runUseAllBtn.TextSize = 12
+runUseAllBtn.Font = Enum.Font.SourceSansBold
+runUseAllBtn.BorderSizePixel = 0
+runUseAllBtn.Parent = cardUseAll
+
+local runUseAllCorner = Instance.new("UICorner")
+runUseAllCorner.CornerRadius = UDim.new(0, 4)
+runUseAllCorner.Parent = runUseAllBtn
+
+local runUseAllStroke = Instance.new("UIStroke")
+runUseAllStroke.Thickness = 1
+runUseAllStroke.Color = Color3.fromRGB(110, 85, 145)
+runUseAllStroke.Parent = runUseAllBtn
+
+-- Seção de Configurações para Early Collect / Collect All Items
+local configFrame = Instance.new("Frame")
+configFrame.Name = "ConfigFrame"
+configFrame.Size = UDim2.new(1, -20, 0, 120)
+configFrame.Position = UDim2.new(0, 10, 0, 310)
+configFrame.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
+configFrame.BorderSizePixel = 0
+configFrame.Parent = itemsFrame
+
+local configCorner = Instance.new("UICorner")
+configCorner.CornerRadius = UDim.new(0, 6)
+configCorner.Parent = configFrame
+
+local configStroke = Instance.new("UIStroke")
+configStroke.Thickness = 1
+configStroke.Color = Color3.fromRGB(45, 45, 60)
+configStroke.Parent = configFrame
+
+-- Configuração 1: Wait before teleporting to the other item.
+local labelConfig1 = Instance.new("TextLabel")
+labelConfig1.Name = "LabelConfig1"
+labelConfig1.Size = UDim2.new(1, -80, 0, 24)
+labelConfig1.Position = UDim2.new(0, 10, 0, 14)
+labelConfig1.BackgroundTransparency = 1
+labelConfig1.Text = "Wait before teleporting to the other item."
+labelConfig1.TextColor3 = Color3.fromRGB(210, 210, 225)
+labelConfig1.TextSize = 11
+labelConfig1.Font = Enum.Font.SourceSansBold
+labelConfig1.TextXAlignment = Enum.TextXAlignment.Left
+labelConfig1.Parent = configFrame
+
+local boxConfig1 = Instance.new("TextBox")
+boxConfig1.Name = "BoxConfig1"
+boxConfig1.Size = UDim2.new(0, 60, 0, 24)
+boxConfig1.Position = UDim2.new(1, -70, 0, 14)
+boxConfig1.BackgroundColor3 = Color3.fromRGB(40, 40, 54)
+boxConfig1.Text = tostring(itemsConfig.waitNext)
+boxConfig1.TextColor3 = Color3.fromRGB(255, 255, 255)
+boxConfig1.TextSize = 12
+boxConfig1.Font = Enum.Font.SourceSansBold
+boxConfig1.ClearTextOnFocus = false
+boxConfig1.Parent = configFrame
+
+local box1Corner = Instance.new("UICorner")
+box1Corner.CornerRadius = UDim.new(0, 4)
+box1Corner.Parent = boxConfig1
+
+-- Configuração 2: Wait before collecting the item when teleporting.
+local labelConfig2 = Instance.new("TextLabel")
+labelConfig2.Name = "LabelConfig2"
+labelConfig2.Size = UDim2.new(1, -80, 0, 24)
+labelConfig2.Position = UDim2.new(0, 10, 0, 62)
+labelConfig2.BackgroundTransparency = 1
+labelConfig2.Text = "Wait before collecting the item when teleporting."
+labelConfig2.TextColor3 = Color3.fromRGB(210, 210, 225)
+labelConfig2.TextSize = 11
+labelConfig2.Font = Enum.Font.SourceSansBold
+labelConfig2.TextXAlignment = Enum.TextXAlignment.Left
+labelConfig2.Parent = configFrame
+
+local boxConfig2 = Instance.new("TextBox")
+boxConfig2.Name = "BoxConfig2"
+boxConfig2.Size = UDim2.new(0, 60, 0, 24)
+boxConfig2.Position = UDim2.new(1, -70, 0, 62)
+boxConfig2.BackgroundColor3 = Color3.fromRGB(40, 40, 54)
+boxConfig2.Text = tostring(itemsConfig.waitCollect)
+boxConfig2.TextColor3 = Color3.fromRGB(255, 255, 255)
+boxConfig2.TextSize = 12
+boxConfig2.Font = Enum.Font.SourceSansBold
+boxConfig2.ClearTextOnFocus = false
+boxConfig2.Parent = configFrame
+
+local box2Corner = Instance.new("UICorner")
+box2Corner.CornerRadius = UDim.new(0, 4)
+box2Corner.Parent = boxConfig2
+
+--------------------------------------------------------------------------------
+-- 4C. PAINEL DE PLAYER (PLAYER FRAME - SCROLLING)
+--------------------------------------------------------------------------------
+
+local playerFrame = Instance.new("ScrollingFrame")
+playerFrame.Name = "PlayerFrame"
+playerFrame.Size = UDim2.new(1, 0, 1, 0)
+playerFrame.BackgroundTransparency = 1
+playerFrame.Visible = false
+playerFrame.ScrollBarThickness = 4
+playerFrame.CanvasSize = UDim2.new(0, 0, 0, 580)
+playerFrame.Parent = contentFrame
+
+-- Cartão 1: Current speed
+local cardSpeed = Instance.new("Frame")
+cardSpeed.Name = "CurrentSpeedCard"
+cardSpeed.Size = UDim2.new(1, -20, 0, 110)
+cardSpeed.Position = UDim2.new(0, 10, 0, 10)
+cardSpeed.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+cardSpeed.BorderSizePixel = 0
+cardSpeed.Parent = playerFrame
+
+local cardSpeedCorner = Instance.new("UICorner")
+cardSpeedCorner.CornerRadius = UDim.new(0, 6)
+cardSpeedCorner.Parent = cardSpeed
+
+local cardSpeedStroke = Instance.new("UIStroke")
+cardSpeedStroke.Thickness = 1
+cardSpeedStroke.Color = Color3.fromRGB(50, 50, 70)
+cardSpeedStroke.Parent = cardSpeed
+
+local cardSpeedTitle = Instance.new("TextLabel")
+cardSpeedTitle.Name = "CardSpeedTitle"
+cardSpeedTitle.Size = UDim2.new(1, -80, 0, 22)
+cardSpeedTitle.Position = UDim2.new(0, 10, 0, 8)
+cardSpeedTitle.BackgroundTransparency = 1
+cardSpeedTitle.Text = "Current speed"
+cardSpeedTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+cardSpeedTitle.TextSize = 14
+cardSpeedTitle.Font = Enum.Font.SourceSansBold
+cardSpeedTitle.TextXAlignment = Enum.TextXAlignment.Left
+cardSpeedTitle.Parent = cardSpeed
+
+local cardSpeedDesc = Instance.new("TextLabel")
+cardSpeedDesc.Name = "CardSpeedDesc"
+cardSpeedDesc.Size = UDim2.new(1, -20, 0, 68)
+cardSpeedDesc.Position = UDim2.new(0, 10, 0, 32)
+cardSpeedDesc.BackgroundTransparency = 1
+cardSpeedDesc.Text = "Change your speed to a lower setting; it's not possible to increase it due to the anti-cheat system."
+cardSpeedDesc.TextColor3 = Color3.fromRGB(170, 170, 190)
+cardSpeedDesc.TextSize = 11
+cardSpeedDesc.Font = Enum.Font.SourceSans
+cardSpeedDesc.TextWrapped = true
+cardSpeedDesc.TextXAlignment = Enum.TextXAlignment.Left
+cardSpeedDesc.TextYAlignment = Enum.TextYAlignment.Top
+cardSpeedDesc.Parent = cardSpeed
+
+local boxSpeed = Instance.new("TextBox")
+boxSpeed.Name = "BoxSpeed"
+boxSpeed.Size = UDim2.new(0, 60, 0, 24)
+boxSpeed.Position = UDim2.new(1, -70, 0, 8)
+boxSpeed.BackgroundColor3 = Color3.fromRGB(40, 40, 54)
+boxSpeed.Text = "16"
+boxSpeed.TextColor3 = Color3.fromRGB(255, 255, 255)
+boxSpeed.TextSize = 12
+boxSpeed.Font = Enum.Font.SourceSansBold
+boxSpeed.ClearTextOnFocus = false
+boxSpeed.Parent = cardSpeed
+
+local boxSpeedCorner = Instance.new("UICorner")
+boxSpeedCorner.CornerRadius = UDim.new(0, 4)
+boxSpeedCorner.Parent = boxSpeed
+
+-- Cartão 2: Current JumpPower
+local cardJumpPower = Instance.new("Frame")
+cardJumpPower.Name = "CurrentJumpPowerCard"
+cardJumpPower.Size = UDim2.new(1, -20, 0, 110)
+cardJumpPower.Position = UDim2.new(0, 10, 0, 130)
+cardJumpPower.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+cardJumpPower.BorderSizePixel = 0
+cardJumpPower.Parent = playerFrame
+
+local cardJPCorner = Instance.new("UICorner")
+cardJPCorner.CornerRadius = UDim.new(0, 6)
+cardJPCorner.Parent = cardJumpPower
+
+local cardJPStroke = Instance.new("UIStroke")
+cardJPStroke.Thickness = 1
+cardJPStroke.Color = Color3.fromRGB(50, 50, 70)
+cardJPStroke.Parent = cardJumpPower
+
+local cardJPTitle = Instance.new("TextLabel")
+cardJPTitle.Name = "CardJPTitle"
+cardJPTitle.Size = UDim2.new(1, -80, 0, 22)
+cardJPTitle.Position = UDim2.new(0, 10, 0, 8)
+cardJPTitle.BackgroundTransparency = 1
+cardJPTitle.Text = "Current JumpPower"
+cardJPTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+cardJPTitle.TextSize = 14
+cardJPTitle.Font = Enum.Font.SourceSansBold
+cardJPTitle.TextXAlignment = Enum.TextXAlignment.Left
+cardJPTitle.Parent = cardJumpPower
+
+local cardJPDesc = Instance.new("TextLabel")
+cardJPDesc.Name = "CardJPDesc"
+cardJPDesc.Size = UDim2.new(1, -20, 0, 68)
+cardJPDesc.Position = UDim2.new(0, 10, 0, 32)
+cardJPDesc.BackgroundTransparency = 1
+cardJPDesc.Text = "It's not possible to increase your JumpPower due to the anti-cheat system."
+cardJPDesc.TextColor3 = Color3.fromRGB(170, 170, 190)
+cardJPDesc.TextSize = 11
+cardJPDesc.Font = Enum.Font.SourceSans
+cardJPDesc.TextWrapped = true
+cardJPDesc.TextXAlignment = Enum.TextXAlignment.Left
+cardJPDesc.TextYAlignment = Enum.TextYAlignment.Top
+cardJPDesc.Parent = cardJumpPower
+
+local boxJumpPower = Instance.new("TextBox")
+boxJumpPower.Name = "BoxJumpPower"
+boxJumpPower.Size = UDim2.new(0, 60, 0, 24)
+boxJumpPower.Position = UDim2.new(1, -70, 0, 8)
+boxJumpPower.BackgroundColor3 = Color3.fromRGB(40, 40, 54)
+boxJumpPower.Text = "50"
+boxJumpPower.TextColor3 = Color3.fromRGB(255, 255, 255)
+boxJumpPower.TextSize = 12
+boxJumpPower.Font = Enum.Font.SourceSansBold
+boxJumpPower.ClearTextOnFocus = false
+boxJumpPower.Parent = cardJumpPower
+
+local boxJPCorner = Instance.new("UICorner")
+boxJPCorner.CornerRadius = UDim.new(0, 4)
+boxJPCorner.Parent = boxJumpPower
+
+--------------------------------------------------------------------------------
+-- Cartão 2.5: Fast Speed (BYPASSED)
+--------------------------------------------------------------------------------
+local cardFastSpeed = Instance.new("Frame")
+cardFastSpeed.Name = "FastSpeedCard"
+cardFastSpeed.Size = UDim2.new(1, -20, 0, 100)
+cardFastSpeed.Position = UDim2.new(0, 10, 0, 250)
+cardFastSpeed.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+cardFastSpeed.BorderSizePixel = 0
+cardFastSpeed.Parent = playerFrame
+
+local cardFastSpeedCorner = Instance.new("UICorner")
+cardFastSpeedCorner.CornerRadius = UDim.new(0, 6)
+cardFastSpeedCorner.Parent = cardFastSpeed
+
+local cardFastSpeedStroke = Instance.new("UIStroke")
+cardFastSpeedStroke.Thickness = 1
+cardFastSpeedStroke.Color = Color3.fromRGB(50, 50, 70)
+cardFastSpeedStroke.Parent = cardFastSpeed
+
+local cardFastSpeedTitle = Instance.new("TextLabel")
+cardFastSpeedTitle.Name = "CardFastSpeedTitle"
+cardFastSpeedTitle.Size = UDim2.new(1, -80, 0, 22)
+cardFastSpeedTitle.Position = UDim2.new(0, 10, 0, 8)
+cardFastSpeedTitle.BackgroundTransparency = 1
+cardFastSpeedTitle.Text = "Fast Speed (BYPASSED)"
+cardFastSpeedTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+cardFastSpeedTitle.TextSize = 14
+cardFastSpeedTitle.Font = Enum.Font.SourceSansBold
+cardFastSpeedTitle.TextXAlignment = Enum.TextXAlignment.Left
+cardFastSpeedTitle.Parent = cardFastSpeed
+
+local cardFastSpeedDesc = Instance.new("TextLabel")
+cardFastSpeedDesc.Name = "CardFastSpeedDesc"
+cardFastSpeedDesc.Size = UDim2.new(1, -20, 0, 58)
+cardFastSpeedDesc.Position = UDim2.new(0, 10, 0, 32)
+cardFastSpeedDesc.BackgroundTransparency = 1
+cardFastSpeedDesc.Text = "Be faster without the anti-cheat detecting you (still at risk of being kicked if you spin or jump too much)"
+cardFastSpeedDesc.TextColor3 = Color3.fromRGB(170, 170, 190)
+cardFastSpeedDesc.TextSize = 11
+cardFastSpeedDesc.Font = Enum.Font.SourceSans
+cardFastSpeedDesc.TextWrapped = true
+cardFastSpeedDesc.TextXAlignment = Enum.TextXAlignment.Left
+cardFastSpeedDesc.TextYAlignment = Enum.TextYAlignment.Top
+cardFastSpeedDesc.Parent = cardFastSpeed
+
+local toggleFastSpeedBtn = Instance.new("TextButton")
+toggleFastSpeedBtn.Name = "ToggleFastSpeedBtn"
+toggleFastSpeedBtn.Size = UDim2.new(0, 60, 0, 24)
+toggleFastSpeedBtn.Position = UDim2.new(1, -70, 0, 8)
+toggleFastSpeedBtn.BackgroundColor3 = itemsConfig.fastSpeed and Color3.fromRGB(50, 180, 80) or Color3.fromRGB(180, 50, 50)
+toggleFastSpeedBtn.Text = itemsConfig.fastSpeed and "On" or "Off"
+toggleFastSpeedBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleFastSpeedBtn.TextSize = 12
+toggleFastSpeedBtn.Font = Enum.Font.SourceSansBold
+toggleFastSpeedBtn.Parent = cardFastSpeed
+
+local toggleFastSpeedCorner = Instance.new("UICorner")
+toggleFastSpeedCorner.CornerRadius = UDim.new(0, 4)
+toggleFastSpeedCorner.Parent = toggleFastSpeedBtn
+
+--------------------------------------------------------------------------------
+-- Cartão 3: Infinite Jump
+--------------------------------------------------------------------------------
+local cardInfJump = Instance.new("Frame")
+cardInfJump.Name = "InfiniteJumpCard"
+cardInfJump.Size = UDim2.new(1, -20, 0, 100)
+cardInfJump.Position = UDim2.new(0, 10, 0, 360)
+cardInfJump.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+cardInfJump.BorderSizePixel = 0
+cardInfJump.Parent = playerFrame
+
+local cardInfJumpCorner = Instance.new("UICorner")
+cardInfJumpCorner.CornerRadius = UDim.new(0, 6)
+cardInfJumpCorner.Parent = cardInfJump
+
+local cardInfJumpStroke = Instance.new("UIStroke")
+cardInfJumpStroke.Thickness = 1
+cardInfJumpStroke.Color = Color3.fromRGB(50, 50, 70)
+cardInfJumpStroke.Parent = cardInfJump
+
+local cardInfJumpTitle = Instance.new("TextLabel")
+cardInfJumpTitle.Name = "CardInfJumpTitle"
+cardInfJumpTitle.Size = UDim2.new(1, -80, 0, 22)
+cardInfJumpTitle.Position = UDim2.new(0, 10, 0, 8)
+cardInfJumpTitle.BackgroundTransparency = 1
+cardInfJumpTitle.Text = "Infinite Jump"
+cardInfJumpTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+cardInfJumpTitle.TextSize = 14
+cardInfJumpTitle.Font = Enum.Font.SourceSansBold
+cardInfJumpTitle.TextXAlignment = Enum.TextXAlignment.Left
+cardInfJumpTitle.Parent = cardInfJump
+
+local cardInfJumpDesc = Instance.new("TextLabel")
+cardInfJumpDesc.Name = "CardInfJumpDesc"
+cardInfJumpDesc.Size = UDim2.new(1, -20, 0, 58)
+cardInfJumpDesc.Position = UDim2.new(0, 10, 0, 32)
+cardInfJumpDesc.BackgroundTransparency = 1
+cardInfJumpDesc.Text = "Jump as many times as you want! Not patched yet."
+cardInfJumpDesc.TextColor3 = Color3.fromRGB(170, 170, 190)
+cardInfJumpDesc.TextSize = 11
+cardInfJumpDesc.Font = Enum.Font.SourceSans
+cardInfJumpDesc.TextWrapped = true
+cardInfJumpDesc.TextXAlignment = Enum.TextXAlignment.Left
+cardInfJumpDesc.TextYAlignment = Enum.TextYAlignment.Top
+cardInfJumpDesc.Parent = cardInfJump
+
+local toggleInfJumpBtn = Instance.new("TextButton")
+toggleInfJumpBtn.Name = "ToggleInfJumpBtn"
+toggleInfJumpBtn.Size = UDim2.new(0, 60, 0, 24)
+toggleInfJumpBtn.Position = UDim2.new(1, -70, 0, 8)
+toggleInfJumpBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+toggleInfJumpBtn.Text = "Off"
+toggleInfJumpBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleInfJumpBtn.TextSize = 12
+toggleInfJumpBtn.Font = Enum.Font.SourceSansBold
+toggleInfJumpBtn.Parent = cardInfJump
+
+local toggleInfJumpCorner = Instance.new("UICorner")
+toggleInfJumpCorner.CornerRadius = UDim.new(0, 4)
+toggleInfJumpCorner.Parent = toggleInfJumpBtn
+
+-- Cartão 4: Players ESP
+local cardPlayersESP = Instance.new("Frame")
+cardPlayersESP.Name = "PlayersESPCard"
+cardPlayersESP.Size = UDim2.new(1, -20, 0, 100)
+cardPlayersESP.Position = UDim2.new(0, 10, 0, 360)
+cardPlayersESP.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+cardPlayersESP.BorderSizePixel = 0
+cardPlayersESP.Parent = playerFrame
+
+local cardPECorner = Instance.new("UICorner")
+cardPECorner.CornerRadius = UDim.new(0, 6)
+cardPECorner.Parent = cardPlayersESP
+
+local cardPEStroke = Instance.new("UIStroke")
+cardPEStroke.Thickness = 1
+cardPEStroke.Color = Color3.fromRGB(50, 50, 70)
+cardPEStroke.Parent = cardPlayersESP
+
+local cardPETitle = Instance.new("TextLabel")
+cardPETitle.Name = "CardPETitle"
+cardPETitle.Size = UDim2.new(1, -80, 0, 22)
+cardPETitle.Position = UDim2.new(0, 10, 0, 8)
+cardPETitle.BackgroundTransparency = 1
+cardPETitle.Text = "Players ESP"
+cardPETitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+cardPETitle.TextSize = 14
+cardPETitle.Font = Enum.Font.SourceSansBold
+cardPETitle.TextXAlignment = Enum.TextXAlignment.Left
+cardPETitle.Parent = cardPlayersESP
+
+local cardPEDesc = Instance.new("TextLabel")
+cardPEDesc.Name = "CardPEDesc"
+cardPEDesc.Size = UDim2.new(1, -20, 0, 58)
+cardPEDesc.Position = UDim2.new(0, 10, 0, 32)
+cardPEDesc.BackgroundTransparency = 1
+cardPEDesc.Text = "Shows active players with detailed stats above their character."
+cardPEDesc.TextColor3 = Color3.fromRGB(170, 170, 190)
+cardPEDesc.TextSize = 11
+cardPEDesc.Font = Enum.Font.SourceSans
+cardPEDesc.TextWrapped = true
+cardPEDesc.TextXAlignment = Enum.TextXAlignment.Left
+cardPEDesc.TextYAlignment = Enum.TextYAlignment.Top
+cardPEDesc.Parent = cardPlayersESP
+
+local togglePlayersESPBtn = Instance.new("TextButton")
+togglePlayersESPBtn.Name = "TogglePlayersESPBtn"
+togglePlayersESPBtn.Size = UDim2.new(0, 60, 0, 24)
+togglePlayersESPBtn.Position = UDim2.new(1, -70, 0, 8)
+togglePlayersESPBtn.BackgroundColor3 = itemsConfig.playersESP and Color3.fromRGB(50, 180, 80) or Color3.fromRGB(180, 50, 50)
+togglePlayersESPBtn.Text = itemsConfig.playersESP and "On" or "Off"
+togglePlayersESPBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+togglePlayersESPBtn.TextSize = 12
+togglePlayersESPBtn.Font = Enum.Font.SourceSansBold
+togglePlayersESPBtn.Parent = cardPlayersESP
+
+local togglePECorner = Instance.new("UICorner")
+togglePECorner.CornerRadius = UDim.new(0, 4)
+togglePECorner.Parent = togglePlayersESPBtn
+
+-- Cartão 5: Items ESP
+local cardItemsESP = Instance.new("Frame")
+cardItemsESP.Name = "ItemsESPCard"
+cardItemsESP.Size = UDim2.new(1, -20, 0, 100)
+cardItemsESP.Position = UDim2.new(0, 10, 0, 470)
+cardItemsESP.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+cardItemsESP.BorderSizePixel = 0
+cardItemsESP.Parent = playerFrame
+
+local cardIECorner = Instance.new("UICorner")
+cardIECorner.CornerRadius = UDim.new(0, 6)
+cardIECorner.Parent = cardItemsESP
+
+local cardIEStroke = Instance.new("UIStroke")
+cardIEStroke.Thickness = 1
+cardIEStroke.Color = Color3.fromRGB(50, 50, 70)
+cardIEStroke.Parent = cardItemsESP
+
+local cardIETitle = Instance.new("TextLabel")
+cardIETitle.Name = "CardIETitle"
+cardIETitle.Size = UDim2.new(1, -80, 0, 22)
+cardIETitle.Position = UDim2.new(0, 10, 0, 8)
+cardIETitle.BackgroundTransparency = 1
+cardIETitle.Text = "Items ESP"
+cardIETitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+cardIETitle.TextSize = 14
+cardIETitle.Font = Enum.Font.SourceSansBold
+cardIETitle.TextXAlignment = Enum.TextXAlignment.Left
+cardIETitle.Parent = cardItemsESP
+
+local cardIEDesc = Instance.new("TextLabel")
+cardIEDesc.Name = "CardIEDesc"
+cardIEDesc.Size = UDim2.new(1, -20, 0, 58)
+cardIEDesc.Position = UDim2.new(0, 10, 0, 32)
+cardIEDesc.BackgroundTransparency = 1
+cardIEDesc.Text = "Shows item locations on the map with unique color codes."
+cardIEDesc.TextColor3 = Color3.fromRGB(170, 170, 190)
+cardIEDesc.TextSize = 11
+cardIEDesc.Font = Enum.Font.SourceSans
+cardIEDesc.TextWrapped = true
+cardIEDesc.TextXAlignment = Enum.TextXAlignment.Left
+cardIEDesc.TextYAlignment = Enum.TextYAlignment.Top
+cardIEDesc.Parent = cardItemsESP
+
+local toggleItemsESPBtn = Instance.new("TextButton")
+toggleItemsESPBtn.Name = "ToggleItemsESPBtn"
+toggleItemsESPBtn.Size = UDim2.new(0, 60, 0, 24)
+toggleItemsESPBtn.Position = UDim2.new(1, -70, 0, 8)
+toggleItemsESPBtn.BackgroundColor3 = itemsConfig.itemsESP and Color3.fromRGB(50, 180, 80) or Color3.fromRGB(180, 50, 50)
+toggleItemsESPBtn.Text = itemsConfig.itemsESP and "On" or "Off"
+toggleItemsESPBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleItemsESPBtn.TextSize = 12
+toggleItemsESPBtn.Font = Enum.Font.SourceSansBold
+toggleItemsESPBtn.Parent = cardItemsESP
+
+local toggleIECorner = Instance.new("UICorner")
+toggleIECorner.CornerRadius = UDim.new(0, 4)
+toggleIECorner.Parent = toggleItemsESPBtn
+
+--------------------------------------------------------------------------------
+-- 4D. PAINEL DE SAFETY (SAFETY FRAME - SCROLLING)
+--------------------------------------------------------------------------------
+
+local safetyFrame = Instance.new("ScrollingFrame")
+safetyFrame.Name = "SafetyFrame"
+safetyFrame.Size = UDim2.new(1, 0, 1, 0)
+safetyFrame.BackgroundTransparency = 1
+safetyFrame.Visible = false
+safetyFrame.ScrollBarThickness = 4
+safetyFrame.CanvasSize = UDim2.new(0, 0, 0, 200)
+safetyFrame.Parent = contentFrame
+
+-- Cartão 1: Anti KnockBack
+local cardAntiKB = Instance.new("Frame")
+cardAntiKB.Name = "AntiKnockBackCard"
+cardAntiKB.Size = UDim2.new(1, -20, 0, 110)
+cardAntiKB.Position = UDim2.new(0, 10, 0, 10)
+cardAntiKB.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+cardAntiKB.BorderSizePixel = 0
+cardAntiKB.Parent = safetyFrame
+
+local cardAKBCorner = Instance.new("UICorner")
+cardAKBCorner.CornerRadius = UDim.new(0, 6)
+cardAKBCorner.Parent = cardAntiKB
+
+local cardAKBStroke = Instance.new("UIStroke")
+cardAKBStroke.Thickness = 1
+cardAKBStroke.Color = Color3.fromRGB(50, 50, 70)
+cardAKBStroke.Parent = cardAntiKB
+
+local cardAKBTitle = Instance.new("TextLabel")
+cardAKBTitle.Name = "CardAKBTitle"
+cardAKBTitle.Size = UDim2.new(1, -80, 0, 22)
+cardAKBTitle.Position = UDim2.new(0, 10, 0, 8)
+cardAKBTitle.BackgroundTransparency = 1
+cardAKBTitle.Text = "Anti KnockBack"
+cardAKBTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+cardAKBTitle.TextSize = 14
+cardAKBTitle.Font = Enum.Font.SourceSansBold
+cardAKBTitle.TextXAlignment = Enum.TextXAlignment.Left
+cardAKBTitle.Parent = cardAntiKB
+
+local cardAKBDesc = Instance.new("TextLabel")
+cardAKBDesc.Name = "CardAKBDesc"
+cardAKBDesc.Size = UDim2.new(1, -20, 0, 68)
+cardAKBDesc.Position = UDim2.new(0, 10, 0, 32)
+cardAKBDesc.BackgroundTransparency = 1
+cardAKBDesc.Text = "It prevents you from getting knocked back by players."
+cardAKBDesc.TextColor3 = Color3.fromRGB(170, 170, 190)
+cardAKBDesc.TextSize = 11
+cardAKBDesc.Font = Enum.Font.SourceSans
+cardAKBDesc.TextWrapped = true
+cardAKBDesc.TextXAlignment = Enum.TextXAlignment.Left
+cardAKBDesc.TextYAlignment = Enum.TextYAlignment.Top
+cardAKBDesc.Parent = cardAntiKB
+
+local toggleAntiKBBtn = Instance.new("TextButton")
+toggleAntiKBBtn.Name = "ToggleAntiKBBtn"
+toggleAntiKBBtn.Size = UDim2.new(0, 60, 0, 24)
+toggleAntiKBBtn.Position = UDim2.new(1, -70, 0, 8)
+toggleAntiKBBtn.BackgroundColor3 = itemsConfig.antiKnockback and Color3.fromRGB(50, 180, 80) or Color3.fromRGB(180, 50, 50)
+toggleAntiKBBtn.Text = itemsConfig.antiKnockback and "On" or "Off"
+toggleAntiKBBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleAntiKBBtn.TextSize = 12
+toggleAntiKBBtn.Font = Enum.Font.SourceSansBold
+toggleAntiKBBtn.Parent = cardAntiKB
+
+local toggleAKBCorner = Instance.new("UICorner")
+toggleAKBCorner.CornerRadius = UDim.new(0, 4)
+toggleAKBCorner.Parent = toggleAntiKBBtn
+
+--------------------------------------------------------------------------------
+-- 4E. PAINEL DE GAME (GAME FRAME - SCROLLING)
+--------------------------------------------------------------------------------
+
+local gameFrame = Instance.new("ScrollingFrame")
+gameFrame.Name = "GameFrame"
+gameFrame.Size = UDim2.new(1, 0, 1, 0)
+gameFrame.BackgroundTransparency = 1
+gameFrame.Visible = false
+gameFrame.ScrollBarThickness = 4
+gameFrame.CanvasSize = UDim2.new(0, 0, 0, 200)
+gameFrame.Parent = contentFrame
+
+-- Cartão 1: Return to Marketplace Slap Royale when disconnected or kicked
+local cardAutoRejoin = Instance.new("Frame")
+cardAutoRejoin.Name = "AutoRejoinCard"
+cardAutoRejoin.Size = UDim2.new(1, -20, 0, 110)
+cardAutoRejoin.Position = UDim2.new(0, 10, 0, 10)
+cardAutoRejoin.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+cardAutoRejoin.BorderSizePixel = 0
+cardAutoRejoin.Parent = gameFrame
+
+local cardARCorner = Instance.new("UICorner")
+cardARCorner.CornerRadius = UDim.new(0, 6)
+cardARCorner.Parent = cardAutoRejoin
+
+local cardARStroke = Instance.new("UIStroke")
+cardARStroke.Thickness = 1
+cardARStroke.Color = Color3.fromRGB(50, 50, 70)
+cardARStroke.Parent = cardAutoRejoin
+
+local cardARTitle = Instance.new("TextLabel")
+cardARTitle.Name = "CardARTitle"
+cardARTitle.Size = UDim2.new(1, -80, 0, 22)
+cardARTitle.Position = UDim2.new(0, 10, 0, 8)
+cardARTitle.BackgroundTransparency = 1
+cardARTitle.Text = "Return to Marketplace Slap Royale when disconnected or kicked"
+cardARTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+cardARTitle.TextSize = 13
+cardARTitle.Font = Enum.Font.SourceSansBold
+cardARTitle.TextXAlignment = Enum.TextXAlignment.Left
+cardARTitle.Parent = cardAutoRejoin
+
+local cardARDesc = Instance.new("TextLabel")
+cardARDesc.Name = "CardARDesc"
+cardARDesc.Size = UDim2.new(1, -20, 0, 68)
+cardARDesc.Position = UDim2.new(0, 10, 0, 32)
+cardARDesc.BackgroundTransparency = 1
+cardARDesc.Text = "Automatically teleports you back to Slap Royale (PlaceId 9426795465) if you get kicked or disconnected from the server."
+cardARDesc.TextColor3 = Color3.fromRGB(170, 170, 190)
+cardARDesc.TextSize = 11
+cardARDesc.Font = Enum.Font.SourceSans
+cardARDesc.TextWrapped = true
+cardARDesc.TextXAlignment = Enum.TextXAlignment.Left
+cardARDesc.TextYAlignment = Enum.TextYAlignment.Top
+cardARDesc.Parent = cardAutoRejoin
+
+local toggleAutoRejoinBtn = Instance.new("TextButton")
+toggleAutoRejoinBtn.Name = "ToggleAutoRejoinBtn"
+toggleAutoRejoinBtn.Size = UDim2.new(0, 60, 0, 24)
+toggleAutoRejoinBtn.Position = UDim2.new(1, -70, 0, 8)
+toggleAutoRejoinBtn.BackgroundColor3 = itemsConfig.autoRejoin and Color3.fromRGB(50, 180, 80) or Color3.fromRGB(180, 50, 50)
+toggleAutoRejoinBtn.Text = itemsConfig.autoRejoin and "On" or "Off"
+toggleAutoRejoinBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleAutoRejoinBtn.TextSize = 12
+toggleAutoRejoinBtn.Font = Enum.Font.SourceSansBold
+toggleAutoRejoinBtn.Parent = cardAutoRejoin
+
+local toggleARCorner = Instance.new("UICorner")
+toggleARCorner.CornerRadius = UDim.new(0, 4)
+toggleARCorner.Parent = toggleAutoRejoinBtn
+
+--------------------------------------------------------------------------------
+-- 5. LÓGICA DAS ABAS E VALIDAÇÃO DE INPUTS DAS CONFIGURAÇÕES
+--------------------------------------------------------------------------------
+
+local function setActiveTab(activeFrame, activeBtn)
+    combatFrame.Visible = (activeFrame == combatFrame)
+    itemsFrame.Visible = (activeFrame == itemsFrame)
+    playerFrame.Visible = (activeFrame == playerFrame)
+    safetyFrame.Visible = (activeFrame == safetyFrame)
+    gameFrame.Visible = (activeFrame == gameFrame)
+
+    local allBtns = {btnCombatCategory, btnItemsCategory, btnPlayerCategory, btnSafetyCategory, btnGameCategory}
+    for _, btn in ipairs(allBtns) do
+        if btn == activeBtn then
+            btn.BackgroundColor3 = Color3.fromRGB(55, 55, 75)
+            btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        else
+            btn.BackgroundColor3 = Color3.fromRGB(38, 38, 50)
+            btn.TextColor3 = Color3.fromRGB(200, 200, 220)
+        end
+    end
+end
+
+btnCombatCategory.MouseButton1Click:Connect(function() setActiveTab(combatFrame, btnCombatCategory) end)
+btnItemsCategory.MouseButton1Click:Connect(function() setActiveTab(itemsFrame, btnItemsCategory) end)
+btnPlayerCategory.MouseButton1Click:Connect(function() setActiveTab(playerFrame, btnPlayerCategory) end)
+btnSafetyCategory.MouseButton1Click:Connect(function() setActiveTab(safetyFrame, btnSafetyCategory) end)
+btnGameCategory.MouseButton1Click:Connect(function() setActiveTab(gameFrame, btnGameCategory) end)
+
+boxConfig1.FocusLost:Connect(function()
+    local parsed = tonumber(boxConfig1.Text)
+    if parsed and parsed > 0 then
+        itemsConfig.waitNext = parsed
+        boxConfig1.Text = tostring(parsed)
+        saveLocalConfig()
+    else
+        boxConfig1.Text = tostring(itemsConfig.waitNext)
+    end
+end)
+
+boxConfig2.FocusLost:Connect(function()
+    local parsed = tonumber(boxConfig2.Text)
+    if parsed and parsed > 0 then
+        itemsConfig.waitCollect = parsed
+        boxConfig2.Text = tostring(parsed)
+        saveLocalConfig()
+    else
+        boxConfig2.Text = tostring(itemsConfig.waitCollect)
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- 6. SISTEMA DE ARRASTE DA JANELA E DO BOTÃO SY (TOUCH / MOUSE)
+--------------------------------------------------------------------------------
+
+local function makeDraggable(dragHandle, targetFrame)
+    local dragging = false
+    local dragInput = nil
+    local dragStart = Vector2.new(0, 0)
+    local startPos = UDim2.new(0, 0, 0, 0)
+
+    dragHandle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = targetFrame.Position
+
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    dragHandle.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            targetFrame.Position = UDim2.new(
+                startPos.X.Scale,
+                startPos.X.Offset + delta.X,
+                startPos.Y.Scale,
+                startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+end
+
+makeDraggable(topBar, mainFrame)
+makeDraggable(syButton, syButton)
+
+--------------------------------------------------------------------------------
+-- 7. CONTROLE DE INTERFACE (MINIMIZAR, ABRIR E FECHAR)
+--------------------------------------------------------------------------------
+
+minimizeButton.MouseButton1Click:Connect(function()
+    mainFrame.Visible = false
+    syButton.Visible = true
+end)
+
+syButton.MouseButton1Click:Connect(function()
+    syButton.Visible = false
+    mainFrame.Visible = true
+end)
+
+closeButton.MouseButton1Click:Connect(function()
+    screenGui:Destroy()
+end)
+
+--------------------------------------------------------------------------------
+-- 8. FUNÇÕES UTILITÁRIAS E DE INTERAÇÃO NATIVAS
+--------------------------------------------------------------------------------
+
+local function showNotification(title, text)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = 4
+        })
+    end)
+end
+
+-- Simula o pressionamento da tecla (com margem de ping)
+local function pressKey(keyCode)
+    VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+    safeWait(0.05, 0.6)
+    VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+end
+
+-- Simula o clique da tecla 'F' 2 vezes consecutivas
+local function pressKeyTwoTimes(keyCode)
+    for _ = 1, 2 do
+        pressKey(keyCode)
+        safeWait(0.03, 0.6)
+    end
+end
+
+local function clickScreen()
+    local mousePos = UserInputService:GetMouseLocation()
+    VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, true, game, 0)
+    safeWait(0.05, 0.6)
+    VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, false, game, 0)
+end
+
+local function equipItemByName(itemName)
+    local character = LocalPlayer.Character
+    if not character then return false end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return false end
+
+    local currentTool = character:FindFirstChild(itemName)
+    if currentTool and currentTool:IsA("Tool") then
+        return true
+    end
+
+    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+    if backpack then
+        local tool = backpack:FindFirstChild(itemName)
+        if tool and tool:IsA("Tool") then
+            humanoid:EquipTool(tool)
+            return true
+        end
+    end
+
+    return false
+end
+
+local function getClosestVisiblePlayerToBus(busModel, excludedPlayers)
+    if not busModel or not busModel.Parent then return nil end
+    local busPosition = busModel:GetPivot().Position
+    local closestPlayer = nil
+    local shortestDistance = math.huge
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and (not excludedPlayers or not excludedPlayers[player]) then
+            local charInWorkspace = Workspace:FindFirstChild(player.Name)
+            if charInWorkspace then
+                local targetRoot = charInWorkspace:FindFirstChild("HumanoidRootPart")
+                local targetHumanoid = charInWorkspace:FindFirstChildOfClass("Humanoid")
+                local torso = charInWorkspace:FindFirstChild("Torso") or charInWorkspace:FindFirstChild("UpperTorso")
+
+                if targetRoot and targetHumanoid and targetHumanoid.Health > 0 and torso and torso.Transparency == 0 then
+                    local distance = (targetRoot.Position - busPosition).Magnitude
+                    if distance < shortestDistance then
+                        shortestDistance = distance
+                        closestPlayer = player
+                    end
+                end
+            end
+        end
+    end
+
+    return closestPlayer
+end
+
+-- Teleporte aéreo forçado: duração estendida proporcionalmente ao ping,
+-- para o servidor confirmar a nova posição antes das próximas ações.
+local function forceAirTeleport(rootPart, character)
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if humanoid then humanoid.Sit = false end
+
+    local targetDestination = CFrame.new(101.497314453125, 96.10908508300781, 28.451526641845703)
+    local startTime = tick()
+    local duration = 0.35 + pingExtra(0.8)   -- margem extra em ping alto
+
+    while tick() - startTime < duration do
+        if humanoid then humanoid.Sit = false end
+        character:PivotTo(targetDestination)
+        rootPart.CFrame = targetDestination
+        rootPart.AssemblyLinearVelocity = Vector3.zero
+        rootPart.AssemblyAngularVelocity = Vector3.zero
+        RunService.RenderStepped:Wait()
+    end
+end
+
+--------------------------------------------------------------------------------
+-- 9. LÓGICA DE EXECUÇÃO DA AÇÃO "DAMAGE ALL" (COMBAT)
+--------------------------------------------------------------------------------
+
+local isRunningCombo = false
+
+toggleButton.MouseButton1Click:Connect(function()
+    if isRunningCombo then return end
+    isRunningCombo = true
+
+    toggleButton.Text = "On"
+    toggleButton.BackgroundColor3 = Color3.fromRGB(50, 180, 80)
+
+    local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    local rootPart = character:WaitForChild("HumanoidRootPart")
+
+    local itemsFolder = Workspace:FindFirstChild("Items")
+    local truePowerItem = itemsFolder and itemsFolder:FindFirstChild("True Power")
+    local cubeOfIceItem = itemsFolder and itemsFolder:FindFirstChild("Cube of Ice")
+
+    if not itemsFolder or not truePowerItem or not cubeOfIceItem then
+        showNotification("Error", "True Power or Cube of Ice not found! Try again in another round.")
+        isRunningCombo = false
+        toggleButton.Text = "Off"
+        toggleButton.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+        return
+    end
+
+    if truePowerItem:IsA("BasePart") then
+        rootPart.CFrame = truePowerItem.CFrame
+    elseif truePowerItem:IsA("Model") then
+        rootPart.CFrame = truePowerItem:GetPivot()
+    end
+    safeWait(0.15, 0.7)
+    pressKeyTwoTimes(Enum.KeyCode.F)
+    safeWait(0.4, 0.6)
+
+    if cubeOfIceItem:IsA("BasePart") then
+        rootPart.CFrame = cubeOfIceItem.CFrame
+    elseif cubeOfIceItem:IsA("Model") then
+        rootPart.CFrame = cubeOfIceItem:GetPivot()
+    end
+    safeWait(0.15, 0.7)
+    pressKeyTwoTimes(Enum.KeyCode.F)
+    safeWait(0.4, 0.6)
+
+    local busModel = Workspace:WaitForChild("BusModel")
+    local busStartTime = tick()
+
+    local remotes = ReplicatedStorage:WaitForChild("Remotes")
+    local busJumpingEvent = remotes:WaitForChild("BusJumping")
+    busJumpingEvent:FireServer()
+
+    forceAirTeleport(rootPart, character)
+
+    equipItemByName("Cube of Ice")
+    clickScreen()
+
+    -- Gap ice -> power com margem de ping (o slack final absorve o atraso)
+    safeWait(3.85, 0.4)
+
+    equipItemByName("True Power")
+    clickScreen()
+
+    local elapsedTime = tick() - busStartTime
+    local remainingCountdown = 7 - elapsedTime
+    if remainingCountdown > 0 then
+        task.wait(remainingCountdown)
+    end
+
+    local targetPlayer = nil
+    repeat
+        targetPlayer = getClosestVisiblePlayerToBus(busModel)
+        if not targetPlayer then
+            task.wait(0.05)
+        end
+    until targetPlayer or not isRunningCombo or not character.Parent
+
+    if targetPlayer then
+        local targetCharInWorkspace = Workspace:FindFirstChild(targetPlayer.Name)
+        if targetCharInWorkspace and targetCharInWorkspace:FindFirstChild("HumanoidRootPart") then
+            local targetRoot = targetCharInWorkspace.HumanoidRootPart
+
+            equipItemByName("Pow")
+            safeWait(0.1, 0.7)
+
+            rootPart.CFrame = targetRoot.CFrame * CFrame.new(0, 0, 3)
+
+            local originalGravity = Workspace.Gravity
+            Workspace.Gravity = 0
+
+            local zeroVelocityConnection
+            zeroVelocityConnection = RunService.Stepped:Connect(function()
+                if rootPart and rootPart.Parent then
+                    rootPart.AssemblyLinearVelocity = Vector3.zero
+                    rootPart.AssemblyAngularVelocity = Vector3.zero
+                end
+            end)
+
+            safeWait(0.25, 0.7)
+
+            local slapEvent = remotes:WaitForChild("Slap")
+            slapEvent:FireServer(Workspace[targetPlayer.Name].HumanoidRootPart)
+
+            safeWait(0.25, 0.6)
+
+            slapEvent:FireServer(Workspace[targetPlayer.Name].HumanoidRootPart)
+
+            if zeroVelocityConnection then
+                zeroVelocityConnection:Disconnect()
+            end
+            Workspace.Gravity = originalGravity
+        else
+            showNotification("Error", "No valid target player found near BusModel.")
+        end
+    else
+        showNotification("Error", "No valid target player found near BusModel.")
+    end
+
+    isRunningCombo = false
+    toggleButton.Text = "Off"
+    toggleButton.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+end)
+
+--------------------------------------------------------------------------------
+-- 10. LÓGICA DE EXECUÇÃO DA AÇÃO "JUMP OFF THE BUS EARLY" (COMBAT)
+--------------------------------------------------------------------------------
+
+runJumpButton.MouseButton1Click:Connect(function()
+    pcall(function()
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        if remotes and remotes:FindFirstChild("BusJumping") then
+            remotes.BusJumping:FireServer()
+            showNotification("Success", "Sent BusJumping RemoteEvent.")
+        else
+            showNotification("Error", "BusJumping RemoteEvent not found.")
+        end
+    end)
+end)
+
+--------------------------------------------------------------------------------
+-- 11. LÓGICA DE EXECUÇÃO DA AÇÃO "SLAP AURA" E "AIMBOT TOMAHAWK" (COMBAT)
+--------------------------------------------------------------------------------
+
+local lastSlapPerTarget = {}
+
+toggleSlapAuraBtn.MouseButton1Click:Connect(function()
+    itemsConfig.slapAura = not itemsConfig.slapAura
+    saveLocalConfig()
+
+    toggleSlapAuraBtn.Text = itemsConfig.slapAura and "On" or "Off"
+    toggleSlapAuraBtn.BackgroundColor3 = itemsConfig.slapAura and Color3.fromRGB(50, 180, 80) or Color3.fromRGB(180, 50, 50)
+end)
+
+toggleAimBotBtn.MouseButton1Click:Connect(function()
+    itemsConfig.aimBotTomahawk = not itemsConfig.aimBotTomahawk
+    saveLocalConfig()
+
+    toggleAimBotBtn.Text = itemsConfig.aimBotTomahawk and "On" or "Off"
+    toggleAimBotBtn.BackgroundColor3 = itemsConfig.aimBotTomahawk and Color3.fromRGB(50, 180, 80) or Color3.fromRGB(180, 50, 50)
+end)
+
+-- LÓGICA DE EXECUÇÃO: SLAP AURA (COM FILTRO DE FERRAMENTAS E FAKEPART NO ALVO)
+
+-- Tabela com as ferramentas/luvas PERMITIDAS a disparar o RemoteEvent de Slap
+local allowedTools = {
+    ["Pack-A-Punch"] = true,
+    ["Vigorous"] = true,
+    ["Aerialist"] = true,
+    ["Tank"] = true,
+    ["Pow"] = true,
+    ["Faculty"] = true,
+    ["Revenge"] = true,
+    ["Juggernaut"] = true,
+    ["Void"] = true,
+    ["Aquarius"] = true,
+    ["Mimic"] = true,
+    ["Thundercaller"] = true,
+    ["Missile-Launcher"] = true,
+    ["Glacier"] = true,
+    ["KABOOM"] = true,
+    ["Witch"] = true,
+    ["Vampire"] = true,
+    ["Cannoneer"] = true
+}
+
+-- Checa se o personagem tem alguma das ferramentas da lista EQUIPADA na mão
+local function isHoldingAllowedTool(character)
+    if not character then return false end
+
+    for _, child in ipairs(character:GetChildren()) do
+        if child:IsA("Tool") and allowedTools[child.Name] then
+            return true
+        end
+    end
+
+    return false
+end
+
+-- Função que bloqueia se o alvo possuir qualquer parte que COMEÇA com "FakePart"
+local function targetHasFakePart(targetChar)
+    if not targetChar then return false end
+
+    for _, descendant in ipairs(targetChar:GetDescendants()) do
+        if descendant:IsA("BasePart") then
+            if string.sub(descendant.Name, 1, 8) == "FakePart" then
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
+-- Loop principal do Slap Aura (cooldown escalado por ping)
+RunService.Heartbeat:Connect(function()
+    if not itemsConfig.slapAura then return end
+
+    local myChar = LocalPlayer.Character
+    if not myChar then return end
+
+    local myRoot = myChar:FindFirstChild("HumanoidRootPart")
+    local myHumanoid = myChar:FindFirstChildOfClass("Humanoid")
+    if not myRoot or not myHumanoid or myHumanoid.Health <= 0 then return end
+
+    -- Bloqueia a execução se NÃO estiver segurando uma das ferramentas permitidas
+    if not isHoldingAllowedTool(myChar) then return end
+
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    local slapEvent = remotes and remotes:FindFirstChild("Slap")
+    if not slapEvent then return end
+
+    -- Cooldown base de 0.5s + margem de ping para não disparar mais rápido que o servidor aceita
+    local cooldown = 0.5 + pingExtra(0.4)
+
+    local closestTarget = nil
+    local shortestDistance = 23
+
+    for _, targetPlayer in ipairs(Players:GetPlayers()) do
+        if targetPlayer ~= LocalPlayer then
+            local targetChar = targetPlayer.Character
+            if targetChar and targetChar.Parent then
+                local targetHumanoid = targetChar:FindFirstChildOfClass("Humanoid")
+                local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
+
+                if targetHumanoid and targetHumanoid.Health > 0 and targetRoot then
+                    if not targetHasFakePart(targetChar) then
+                        local distance = (targetRoot.Position - myRoot.Position).Magnitude
+                        if distance <= shortestDistance then
+                            local now = tick()
+                            local lastSlapTime = lastSlapPerTarget[targetPlayer] or 0
+                            if (now - lastSlapTime) >= cooldown then
+                                shortestDistance = distance
+                                closestTarget = targetPlayer
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if closestTarget and closestTarget.Character then
+        local targetRoot = closestTarget.Character:FindFirstChild("HumanoidRootPart")
+        if targetRoot then
+            lastSlapPerTarget[closestTarget] = tick()
+            slapEvent:FireServer(targetRoot)
+        end
+    end
+end)
+
+-- Loop principal do AimBot Tomahawk
+RunService.RenderStepped:Connect(function()
+    if not itemsConfig.aimBotTomahawk then return end
+
+    local myChar = LocalPlayer.Character
+    if not myChar then return end
+
+    local tomahawkTool = myChar:FindFirstChild("Tomahawk")
+    if not tomahawkTool or not tomahawkTool:IsA("Tool") then return end
+
+    local camera = Workspace.CurrentCamera
+    if not camera then return end
+
+    local closestTargetPart = nil
+    local shortestMouseDistance = math.huge
+    local mousePos = UserInputService:GetMouseLocation()
+
+    for _, targetPlayer in ipairs(Players:GetPlayers()) do
+        if targetPlayer ~= LocalPlayer then
+            local targetChar = targetPlayer.Character
+            if targetChar and targetChar.Parent then
+                local targetHumanoid = targetChar:FindFirstChildOfClass("Humanoid")
+                local targetPart = targetChar:FindFirstChild("Head") or targetChar:FindFirstChild("HumanoidRootPart")
+
+                if targetHumanoid and targetHumanoid.Health > 0 and targetPart then
+                    if not targetHasFakePart(targetChar) then
+                        local screenPos, onScreen = camera:WorldToViewportPoint(targetPart.Position)
+                        if onScreen then
+                            local distToMouse = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+                            if distToMouse < shortestMouseDistance then
+                                shortestMouseDistance = distToMouse
+                                closestTargetPart = targetPart
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if closestTargetPart then
+        camera.CFrame = CFrame.new(camera.CFrame.Position, closestTargetPart.Position)
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- 12. LÓGICA DE EXECUÇÃO DA AÇÃO "EARLY COLLECT ITEMS" (ITEMS)
+--------------------------------------------------------------------------------
+
+local isRunningEarlyCollect = false
+local earlyCollectFinished = false
+
+toggleItemsButton.MouseButton1Click:Connect(function()
+    if earlyCollectFinished or isRunningEarlyCollect then return end
+
+    isRunningEarlyCollect = true
+    toggleItemsButton.Text = "On"
+    toggleItemsButton.BackgroundColor3 = Color3.fromRGB(50, 180, 80)
+    toggleItemsButton.AutoButtonColor = false
+    toggleItemsButton.Active = false
+
+    local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    local rootPart = character:WaitForChild("HumanoidRootPart")
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+    local itemsFolder = Workspace:FindFirstChild("Items")
+    if not itemsFolder then
+        showNotification("Error", "Items folder not found in Workspace.")
+        isRunningEarlyCollect = false
+        earlyCollectFinished = true
+        toggleItemsButton.Text = "Off"
+        toggleItemsButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+        return
+    end
+
+    local priorityOrder = {
+        "True Power",
+        "Potion of Strength",
+        "Bull's essence",
+        "Boba",
+        "Speed Potion",
+        "Frog Potion"
+    }
+
+    local teleportCounter = 0
+    local busWarningShown = false
+    local busJumpingFired = false
+    local failedItems = {}
+
+    -- Função utilitária para execução de 1 teleporte e tentativa de coleta por item
+    local function attemptCollectItem(item)
+        if not item or not item.Parent or item.Parent ~= itemsFolder or failedItems[item] then
+            return false
+        end
+
+        local currentBus = Workspace:FindFirstChild("BusModel")
+        if currentBus and not busJumpingFired then
+            busJumpingFired = true
+
+            pcall(function()
+                local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+                if remotes and remotes:FindFirstChild("BusJumping") then
+                    remotes.BusJumping:FireServer()
+                end
+            end)
+
+            safeWait(0.25, 0.7)
+
+            humanoid = character:FindFirstChildOfClass("Humanoid")
+            if humanoid then
+                humanoid.Sit = false
+                humanoid.Jump = true
+            end
+
+            if item:IsA("BasePart") then
+                rootPart.CFrame = item.CFrame
+            elseif item:IsA("Model") then
+                rootPart.CFrame = item:GetPivot()
+            end
+
+            rootPart.AssemblyLinearVelocity = Vector3.zero
+            rootPart.AssemblyAngularVelocity = Vector3.zero
+
+            if not busWarningShown then
+                showNotification("Warning", "Don't pick up the item or you'll be kicked.")
+                busWarningShown = true
+            end
+
+            safeWait(11.0, 0.5)
+
+            pressKeyTwoTimes(Enum.KeyCode.F)
+            safeWait(itemsConfig.waitNext, 0.8)
+        else
+            humanoid = character:FindFirstChildOfClass("Humanoid")
+            if humanoid then
+                humanoid.Sit = false
+                humanoid.Jump = true
+            end
+
+            if item:IsA("BasePart") then
+                rootPart.CFrame = item.CFrame
+            elseif item:IsA("Model") then
+                rootPart.CFrame = item:GetPivot()
+            end
+
+            rootPart.AssemblyLinearVelocity = Vector3.zero
+            rootPart.AssemblyAngularVelocity = Vector3.zero
+
+            safeWait(itemsConfig.waitCollect, 0.8)
+            pressKeyTwoTimes(Enum.KeyCode.F)
+            safeWait(itemsConfig.waitNext, 0.8)
+        end
+
+        teleportCounter = teleportCounter + 1
+
+        if item and item.Parent == itemsFolder then
+            failedItems[item] = true
+        end
+
+        -- Pausa de 2 segundos a cada 4 TELEPORTES efetuados
+        if teleportCounter > 0 and teleportCounter % 4 == 0 then
+            task.wait(2.0)
+        end
+
+        return true
+    end
+
+    ----------------------------------------------------------------------------
+    -- FASE 1: Coleta inicial limitada a no máximo 2 itens antes de aguardar o ônibus
+    ----------------------------------------------------------------------------
+    local initialItemsTeleported = 0
+    for _, itemName in ipairs(priorityOrder) do
+        if initialItemsTeleported >= 2 then break end
+        for _, itemObj in ipairs(itemsFolder:GetChildren()) do
+            if not character.Parent then break end
+            if initialItemsTeleported >= 2 then break end
+
+            if itemObj.Name == itemName and not failedItems[itemObj] then
+                attemptCollectItem(itemObj)
+                initialItemsTeleported = initialItemsTeleported + 1
+            end
+        end
+    end
+
+    ----------------------------------------------------------------------------
+    -- FASE 2: Aguarda explicitamente o aparecimento do BusModel no Workspace
+    ----------------------------------------------------------------------------
+    while not Workspace:FindFirstChild("BusModel") and character.Parent do
+        task.wait(0.5)
+    end
+
+    ----------------------------------------------------------------------------
+    -- FASE 3: Varredura dos itens restantes após o ônibus aparecer
+    ----------------------------------------------------------------------------
+    for _, itemName in ipairs(priorityOrder) do
+        for _, itemObj in ipairs(itemsFolder:GetChildren()) do
+            if not character.Parent then break end
+            if itemObj.Name == itemName and not failedItems[itemObj] then
+                attemptCollectItem(itemObj)
+            end
+        end
+    end
+
+    -- Confirmação final para verificar se sobrou algum item elegível da lista
+    for _, itemName in ipairs(priorityOrder) do
+        for _, itemObj in ipairs(itemsFolder:GetChildren()) do
+            if not character.Parent then break end
+            if itemObj.Name == itemName and not failedItems[itemObj] and itemObj.Parent == itemsFolder then
+                attemptCollectItem(itemObj)
+            end
+        end
+    end
+
+    isRunningEarlyCollect = false
+    earlyCollectFinished = true
+
+    toggleItemsButton.Text = "Off"
+    toggleItemsButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+    toggleItemsButton.AutoButtonColor = false
+    toggleItemsButton.Active = false
+end)
+
+--------------------------------------------------------------------------------
+-- 13. LÓGICA DE EXECUÇÃO DA AÇÃO "COLLECT ALL ITEMS" (ITEMS)
+--------------------------------------------------------------------------------
+
+local isRunningCollectAll = false
+local collectAllFinished = false
+
+toggleCollectAllBtn.MouseButton1Click:Connect(function()
+    if collectAllFinished or isRunningCollectAll then return end
+
+    isRunningCollectAll = true
+    toggleCollectAllBtn.Text = "On"
+    toggleCollectAllBtn.BackgroundColor3 = Color3.fromRGB(50, 180, 80)
+    toggleCollectAllBtn.AutoButtonColor = false
+    toggleCollectAllBtn.Active = false
+
+    local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    local rootPart = character:WaitForChild("HumanoidRootPart")
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+    local itemsFolder = Workspace:FindFirstChild("Items")
+    if not itemsFolder then
+        showNotification("Error", "Items folder not found in Workspace.")
+        isRunningCollectAll = false
+        collectAllFinished = true
+        toggleCollectAllBtn.Text = "Off"
+        toggleCollectAllBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+        return
+    end
+
+    local teleportCounter = 0
+    local failedItems = {}
+
+    -- Função utilitária de teleporte individual com contagem por tentativa
+    local function attemptCollectAllItem(item)
+        if not item or not item.Parent or item.Parent ~= itemsFolder or failedItems[item] then
+            return false
+        end
+
+        humanoid = character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            humanoid.Sit = false
+            humanoid.Jump = true
+        end
+
+        if item:IsA("BasePart") then
+            rootPart.CFrame = item.CFrame
+        elseif item:IsA("Model") then
+            rootPart.CFrame = item:GetPivot()
+        end
+
+        rootPart.AssemblyLinearVelocity = Vector3.zero
+        rootPart.AssemblyAngularVelocity = Vector3.zero
+
+        safeWait(itemsConfig.waitCollect, 0.8)
+        pressKeyTwoTimes(Enum.KeyCode.F)
+        safeWait(itemsConfig.waitNext, 0.8)
+
+        teleportCounter = teleportCounter + 1
+
+        if item and item.Parent == itemsFolder then
+            failedItems[item] = true
+        end
+
+        -- Pausa de 2 segundos a cada 4 TELEPORTES efetuados
+        if teleportCounter > 0 and teleportCounter % 4 == 0 then
+            task.wait(2.0)
+        end
+
+        return true
+    end
+
+    -- Varredura inicial de todos os itens disponíveis na pasta
+    for _, item in ipairs(itemsFolder:GetChildren()) do
+        if not character.Parent then break end
+        if not failedItems[item] then
+            attemptCollectAllItem(item)
+        end
+    end
+
+    -- Varredura final de checagem para itens não processados
+    for _, item in ipairs(itemsFolder:GetChildren()) do
+        if not character.Parent then break end
+        if not failedItems[item] and item.Parent == itemsFolder then
+            attemptCollectAllItem(item)
+        end
+    end
+
+    isRunningCollectAll = false
+    collectAllFinished = true
+
+    toggleCollectAllBtn.Text = "Off"
+    toggleCollectAllBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+    toggleCollectAllBtn.AutoButtonColor = false
+    toggleCollectAllBtn.Active = false
+end)
+
+--------------------------------------------------------------------------------
+-- 14. LÓGICA DE EXECUÇÃO DA AÇÃO "USE ALL PERMANENT ITEMS" (ITEMS)
+--------------------------------------------------------------------------------
+
+runUseAllBtn.MouseButton1Click:Connect(function()
+    local permanentItemNames = {
+        "Bull's essence",
+        "Potion of Strength",
+        "Boba",
+        "Frog Potion",
+        "Speed Potion"
+    }
+
+    local totalUsed = 0
+    for _, targetName in ipairs(permanentItemNames) do
+        while true do
+            local foundAndEquipped = equipItemByName(targetName)
+            if not foundAndEquipped then break end
+
+            safeWait(0.1, 0.6)
+            clickScreen()
+            safeWait(0.15, 0.6)
+            totalUsed = totalUsed + 1
+        end
+    end
+
+    if totalUsed > 0 then
+        showNotification("Success", "Finished using all permanent items (" .. tostring(totalUsed) .. " used).")
+    else
+        showNotification("Warning", "No permanent items found in Backpack or Character.")
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- 15. LÓGICA DE PLAYER (SPEED, JUMPPOWER, INFINITE JUMP, ESP)
+--------------------------------------------------------------------------------
+
+local customWalkSpeed = nil
+local lastValidWalkSpeed = 16
+
+local customJumpPower = nil
+local lastValidJumpPower = 50
+
+local infiniteJumpActive = false
+
+RunService.RenderStepped:Connect(function()
+    local character = LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        if customWalkSpeed then
+            humanoid.WalkSpeed = customWalkSpeed
+        else
+            lastValidWalkSpeed = humanoid.WalkSpeed
+            if not boxSpeed:IsFocused() then
+                boxSpeed.Text = tostring(math.floor(humanoid.WalkSpeed + 0.5))
+            end
+        end
+
+        if customJumpPower then
+            humanoid.JumpPower = customJumpPower
+        else
+            lastValidJumpPower = humanoid.JumpPower
+            if not boxJumpPower:IsFocused() then
+                boxJumpPower.Text = tostring(math.floor(humanoid.JumpPower + 0.5))
+            end
+        end
+    end
+end)
+
+boxSpeed.FocusLost:Connect(function()
+    local parsed = tonumber(boxSpeed.Text)
+    local character = LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+    if parsed and humanoid then
+        if parsed > lastValidWalkSpeed then
+            showNotification("Warning", "Cannot increase speed due to anti-cheat system.")
+            boxSpeed.Text = tostring(customWalkSpeed or lastValidWalkSpeed)
+        else
+            customWalkSpeed = parsed
+            humanoid.WalkSpeed = parsed
+        end
+    else
+        boxSpeed.Text = tostring(customWalkSpeed or lastValidWalkSpeed)
+    end
+end)
+
+boxJumpPower.FocusLost:Connect(function()
+    local parsed = tonumber(boxJumpPower.Text)
+    local character = LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+    if parsed and humanoid then
+        if parsed > lastValidJumpPower then
+            showNotification("Warning", "Cannot increase JumpPower due to anti-cheat system.")
+            boxJumpPower.Text = tostring(customJumpPower or lastValidJumpPower)
+        else
+            customJumpPower = parsed
+            humanoid.JumpPower = parsed
+        end
+    else
+        boxJumpPower.Text = tostring(customJumpPower or lastValidJumpPower)
+    end
+end)
+
+toggleInfJumpBtn.MouseButton1Click:Connect(function()
+    infiniteJumpActive = not infiniteJumpActive
+    if infiniteJumpActive then
+        toggleInfJumpBtn.Text = "On"
+        toggleInfJumpBtn.BackgroundColor3 = Color3.fromRGB(50, 180, 80)
+    else
+        toggleInfJumpBtn.Text = "Off"
+        toggleInfJumpBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+    end
+end)
+
+UserInputService.JumpRequest:Connect(function()
+    if infiniteJumpActive then
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+        end
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- LÓGICA DE EXECUÇÃO: FAST SPEED (BYPASSED)
+--------------------------------------------------------------------------------
+
+local isFastSpeedActive = itemsConfig.fastSpeed
+local originalRightLegC0 = nil
+
+-- Aplica o estado salvo no boot da UI
+if isFastSpeedActive then
+    toggleFastSpeedBtn.Text = "On"
+    toggleFastSpeedBtn.BackgroundColor3 = Color3.fromRGB(50, 180, 80)
+end
+
+-- Função auxiliar para obter a junta e o membro da perna direita
+local function getRightLegJoint(character)
+    if not character then return nil end
+    local rightLeg = character:FindFirstChild("Right Leg") or character:FindFirstChild("RightUpperLeg")
+    local torso = character:FindFirstChild("Torso") or character:FindFirstChild("LowerTorso")
+
+    if rightLeg and torso then
+        local joint = rightLeg:FindFirstChildOfClass("Motor6D") 
+            or torso:FindFirstChild("Right Hip") 
+            or torso:FindFirstChild("RightUpperHip")
+            or rightLeg:FindFirstChild("RightUpperHip")
+        return joint
+    end
+    return nil
+end
+
+-- Evento de clique no botão da UI
+toggleFastSpeedBtn.MouseButton1Click:Connect(function()
+    isFastSpeedActive = not isFastSpeedActive
+
+    -- Corrigido: antes usava uma variável inexistente (playerConfig)
+    itemsConfig.fastSpeed = isFastSpeedActive
+    saveLocalConfig()
+
+    toggleFastSpeedBtn.Text = isFastSpeedActive and "On" or "Off"
+    toggleFastSpeedBtn.BackgroundColor3 = isFastSpeedActive and Color3.fromRGB(50, 180, 80) or Color3.fromRGB(180, 50, 50)
+
+    -- Se for desligado, restaura a posição original da perna imediatamente
+    if not isFastSpeedActive then
+        local character = LocalPlayer.Character
+        local joint = getRightLegJoint(character)
+        if joint and originalRightLegC0 then
+            joint.C0 = originalRightLegC0
+            originalRightLegC0 = nil
+        end
+    end
+end)
+
+-- Monitoramento e offset do motor da perna direita sem desconectar a joint
+RunService.Stepped:Connect(function()
+    if not isFastSpeedActive then return end
+
+    local character = LocalPlayer.Character
+    if not character then return end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return end
+
+    local joint = getRightLegJoint(character)
+    if joint then
+        if not originalRightLegC0 then
+            originalRightLegC0 = joint.C0
+        end
+
+        joint.C0 = CFrame.new(30, -1, 0)
+    end
+end)
+
+-- Restaura o estado da variável ao renascer o personagem
+LocalPlayer.CharacterAdded:Connect(function()
+    originalRightLegC0 = nil
+end)
+
+--------------------------------------------------------------------------------
+-- 16. LÓGICA DE SAFETY (ANTI KNOCKBACK VIA BARREIRAS COM DETECÇÃO DE FAKEPART)
+--------------------------------------------------------------------------------
+
+toggleAntiKBBtn.MouseButton1Click:Connect(function()
+    itemsConfig.antiKnockback = not itemsConfig.antiKnockback
+    saveLocalConfig()
+
+    toggleAntiKBBtn.Text = itemsConfig.antiKnockback and "On" or "Off"
+    toggleAntiKBBtn.BackgroundColor3 = itemsConfig.antiKnockback and Color3.fromRGB(50, 180, 80) or Color3.fromRGB(180, 50, 50)
+end)
+
+local antiKnockbackWalls = {}
+
+-- Limpa as barreiras físicas do Workspace
+local function removeAntiKBDualWalls()
+    for _, wall in ipairs(antiKnockbackWalls) do
+        if wall and wall.Parent then
+            wall:Destroy()
+        end
+    end
+    table.clear(antiKnockbackWalls)
+end
+
+local wallOffsets = {
+    CFrame.new(0, 0, -2.5),  -- Frente
+    CFrame.new(0, 0, 2.5),   -- Trás
+    CFrame.new(-2.5, 0, 0),  -- Esquerda
+    CFrame.new(2.5, 0, 0),   -- Direita
+    CFrame.new(0, 3.5, 0),   -- Cima
+    CFrame.new(0, -3.5, 0)   -- Baixo
+}
+
+local wallSizes = {
+    Vector3.new(5, 6, 0.5),
+    Vector3.new(5, 6, 0.5),
+    Vector3.new(0.5, 6, 5),
+    Vector3.new(0.5, 6, 5),
+    Vector3.new(5, 0.5, 5),
+    Vector3.new(5, 0.5, 5)
+}
+
+-- Monitoramento via Heartbeat
+RunService.Heartbeat:Connect(function()
+    if not itemsConfig.antiKnockback then
+        removeAntiKBDualWalls()
+        return
+    end
+
+    local character = LocalPlayer.Character
+    if not character then
+        removeAntiKBDualWalls()
+        return
+    end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local rootPart = character:FindFirstChild("HumanoidRootPart")
+
+    if not humanoid or humanoid.Health <= 0 or not rootPart then
+        removeAntiKBDualWalls()
+        return
+    end
+
+    -- Condição estrita: Verifica a existência do 'FakePart' no personagem antes de criar/manter barreiras
+    local fakePart = character:FindFirstChild("FakePart")
+    if not fakePart then
+        removeAntiKBDualWalls()
+        return
+    end
+
+    -- Instancia as 6 paredes transparentes apenas se o FakePart for detectado
+    if #antiKnockbackWalls == 0 then
+        for i = 1, 6 do
+            local wall = Instance.new("Part")
+            wall.Name = "AntiKB_BarrierPart"
+            wall.Transparency = 1
+            wall.Anchored = true
+            wall.CanCollide = true
+            wall.Material = Enum.Material.SmoothPlastic
+            wall.Size = wallSizes[i]
+            wall.Parent = Workspace
+            table.insert(antiKnockbackWalls, wall)
+        end
+    end
+
+    -- Atualiza a posição das barreiras ao redor do HumanoidRootPart
+    for i, offset in ipairs(wallOffsets) do
+        local wall = antiKnockbackWalls[i]
+        if wall and wall.Parent then
+            wall.CFrame = rootPart.CFrame * offset
+        end
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- 17. LÓGICA DE GAME (AUTO REJOIN / TELEPORT ON KICK)
+--------------------------------------------------------------------------------
+
+toggleAutoRejoinBtn.MouseButton1Click:Connect(function()
+    itemsConfig.autoRejoin = not itemsConfig.autoRejoin
+    saveLocalConfig()
+
+    toggleAutoRejoinBtn.Text = itemsConfig.autoRejoin and "On" or "Off"
+    toggleAutoRejoinBtn.BackgroundColor3 = itemsConfig.autoRejoin and Color3.fromRGB(50, 180, 80) or Color3.fromRGB(180, 50, 50)
+end)
+
+-- Função utilitária para executar a tentativa de reconexão/teleporte para a partida original
+local function performAutoRejoin()
+    if not itemsConfig.autoRejoin then return end
+    pcall(function()
+        TeleportService:Teleport(9426795465, LocalPlayer)
+    end)
+end
+
+-- Monitora mensagens de erro do Roblox (Desconexão / Kicks de rede)
+GuiService.ErrorMessageChanged:Connect(function()
+    performAutoRejoin()
+end)
+
+-- Monitora a aparição de janelas/prompts de erro sobrepostas do sistema interno (CoreGui)
+pcall(function()
+    local promptOverlay = game:GetService("CoreGui"):WaitForChild("RobloxPromptGui", 5):WaitForChild("promptOverlay", 5)
+    if promptOverlay then
+        promptOverlay.ChildAdded:Connect(function()
+            performAutoRejoin()
+        end)
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- 18. SISTEMA DE ESP (PLAYERS ESP & ITEMS ESP)
+--------------------------------------------------------------------------------
+
+local activePlayerESPs = {}
+local activeItemESPs = {}
+
+local itemColorMap = {
+    ["Bull's essence"]      = Color3.fromRGB(139, 69, 19),
+    ["Potion of Strength"]  = Color3.fromRGB(160, 32, 240),
+    ["True Power"]          = Color3.fromRGB(255, 255, 255),
+    ["Frog Potion"]         = Color3.fromRGB(30, 144, 255),
+    ["Speed Potion"]        = Color3.fromRGB(255, 255, 0),
+    ["Boba"]                = Color3.fromRGB(255, 255, 150),
+    ["Apple"]               = Color3.fromRGB(50, 205, 50),
+    ["Bandage"]             = Color3.fromRGB(0, 255, 255),
+    ["First Aid Kit"]       = Color3.fromRGB(160, 32, 240),
+    ["Forcefield Crystal"]  = Color3.fromRGB(0, 255, 255),
+    ["Healing Potion"]      = Color3.fromRGB(255, 50, 50),
+    ["Tomahawk"]            = Color3.fromRGB(255, 50, 50),
+    ["Cube of Ice"]         = Color3.fromRGB(0, 255, 255),
+    ["Bomb"]                = Color3.fromRGB(255, 140, 0),
+    ["Gravitation Shard"]   = Color3.fromRGB(100, 0, 150)
+}
+
+togglePlayersESPBtn.MouseButton1Click:Connect(function()
+    itemsConfig.playersESP = not itemsConfig.playersESP
+    saveLocalConfig()
+
+    togglePlayersESPBtn.Text = itemsConfig.playersESP and "On" or "Off"
+    togglePlayersESPBtn.BackgroundColor3 = itemsConfig.playersESP and Color3.fromRGB(50, 180, 80) or Color3.fromRGB(180, 50, 50)
+end)
+
+toggleItemsESPBtn.MouseButton1Click:Connect(function()
+    itemsConfig.itemsESP = not itemsConfig.itemsESP
+    saveLocalConfig()
+
+    toggleItemsESPBtn.Text = itemsConfig.itemsESP and "On" or "Off"
+    toggleItemsESPBtn.BackgroundColor3 = itemsConfig.itemsESP and Color3.fromRGB(50, 180, 80) or Color3.fromRGB(180, 50, 50)
+end)
+
+local function cleanupESPTable(tbl)
+    for target, gui in pairs(tbl) do
+        if not target or not target.Parent or not gui.Parent then
+            if gui then gui:Destroy() end
+            tbl[target] = nil
+        end
+    end
+end
+
+RunService.RenderStepped:Connect(function()
+    if itemsConfig.playersESP then
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character and player.Character.Parent then
+                local character = player.Character
+                local head = character:FindFirstChild("Head")
+                local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+                if head and humanoid and humanoid.Health > 0 then
+                    local bbGui = activePlayerESPs[player]
+                    if not bbGui or not bbGui.Parent then
+                        bbGui = Instance.new("BillboardGui")
+                        bbGui.Name = "PlayerESP_Gui"
+                        bbGui.Size = UDim2.new(0, 160, 0, 45)
+                        bbGui.StudsOffset = Vector3.new(0, 2.5, 0)
+                        bbGui.AlwaysOnTop = true
+                        bbGui.Parent = head
+
+                        local textLabel = Instance.new("TextLabel")
+                        textLabel.Name = "ESPLabel"
+                        textLabel.Size = UDim2.new(1, 0, 1, 0)
+                        textLabel.BackgroundTransparency = 1
+                        textLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+                        textLabel.TextStrokeTransparency = 0.2
+                        textLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+                        textLabel.TextSize = 11
+                        textLabel.Font = Enum.Font.SourceSansBold
+                        textLabel.Parent = bbGui
+
+                        activePlayerESPs[player] = bbGui
+                    end
+
+                    local label = bbGui:FindFirstChild("ESPLabel")
+                    if label then
+                        local currentHP = math.floor(humanoid.Health + 0.5)
+                        local maxHP = math.floor(humanoid.MaxHealth + 0.5)
+                        local speed = math.floor(humanoid.WalkSpeed + 0.5)
+                        local jump = math.floor(humanoid.JumpPower + 0.5)
+
+                        label.Text = string.format("%s\nHP: %d/%d | Spd: %d | Jump: %d", player.Name, currentHP, maxHP, speed, jump)
+                    end
+                else
+                    if activePlayerESPs[player] then
+                        activePlayerESPs[player]:Destroy()
+                        activePlayerESPs[player] = nil
+                    end
+                end
+            else
+                if activePlayerESPs[player] then
+                    activePlayerESPs[player]:Destroy()
+                    activePlayerESPs[player] = nil
+                end
+            end
+        end
+    else
+        cleanupESPTable(activePlayerESPs)
+    end
+
+    if itemsConfig.itemsESP then
+        local itemsFolder = Workspace:FindFirstChild("Items")
+        if itemsFolder then
+            for _, itemObj in ipairs(itemsFolder:GetChildren()) do
+                local targetPart = itemObj:IsA("BasePart") and itemObj or (itemObj:IsA("Model") and (itemObj.PrimaryPart or itemObj:FindFirstChildWhichIsA("BasePart")))
+                if targetPart then
+                    local bbGui = activeItemESPs[itemObj]
+                    if not bbGui or not bbGui.Parent then
+                        bbGui = Instance.new("BillboardGui")
+                        bbGui.Name = "ItemESP_Gui"
+                        bbGui.Size = UDim2.new(0, 140, 0, 30)
+                        bbGui.StudsOffset = Vector3.new(0, 1.5, 0)
+                        bbGui.AlwaysOnTop = true
+                        bbGui.Parent = targetPart
+
+                        local textLabel = Instance.new("TextLabel")
+                        textLabel.Name = "ItemLabel"
+                        textLabel.Size = UDim2.new(1, 0, 1, 0)
+                        textLabel.BackgroundTransparency = 1
+                        textLabel.TextStrokeTransparency = 0.2
+                        textLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+                        textLabel.TextSize = 12
+                        textLabel.Font = Enum.Font.SourceSansBold
+                        textLabel.Text = itemObj.Name
+                        textLabel.TextColor3 = itemColorMap[itemObj.Name] or Color3.fromRGB(255, 255, 0)
+                        textLabel.Parent = bbGui
+
+                        activeItemESPs[itemObj] = bbGui
+                    end
+                end
+            end
+        end
+    else
+        cleanupESPTable(activeItemESPs)
+    end
+end)
