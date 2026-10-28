@@ -51,7 +51,7 @@ Migration map:
   * Preferences auto-save -> toggles, sliders, dropdowns, theme, and teleport menu state
 
 Internal helper functions from the non-UI script are preserved and are not exposed as UI controls.
-Old no-op callbacks were not carried over
+Old no-op callbacks were not carried over.
 ]]
 
 --[[
@@ -5111,14 +5111,6 @@ function Items.SetEarlyAutoCollect(state, silent)
 			return
 		end
 
-		if UI.ToggleRefs.EarlyBusJump then
-			UI.ToggleRefs.EarlyBusJump.Set(true, false)
-		end
-
-		if UI.SetAutoEarlyBusJump then
-			UI.SetAutoEarlyBusJump(true, true)
-		end
-
 		Items.DisableEarlyAutoCollectConflicts("Early", silent)
 		Items.ResetPriorityCollectState("Early")
 		if not silent then
@@ -8102,6 +8094,11 @@ function Anti.GetGroundReturnCFrame(root)
 end
 
 function Anti.SetHideUnderMap(state, silent)
+	-- An already disabled feature must not reposition the character at startup.
+	if not state and not Anti.HideUnderMapEnabled then
+		return
+	end
+
 	local root = Anti.GetLocalRoot()
 
 	if not root then
@@ -8442,6 +8439,8 @@ function UI.SetLanguage(value)
  queueSavePreferences()
  Localization.Refresh()
 end
+-- Leaving the bus must be explicitly enabled in this session.
+Preferences.Toggles.EarlyBusJump = false
 Preferences.Toggles.AutoCollect = false
 Preferences.Toggles.HideUnderMap = false
 Preferences.Toggles.AutoPickup = false
@@ -10026,11 +10025,7 @@ function UI.FireEarlyBusJump()
 			end
 		end)
 
-		if UI.TeleportToEarlyBusPriorityItem then
-			UI.TeleportToEarlyBusPriorityItem(true)
-		else
-			UI.RequestEarlyBusPriorityTeleport(0, true)
-		end
+		-- Keep the bus jump itself; do not automatically teleport to an item.
 	end
 
 	return success
@@ -11463,8 +11458,6 @@ function UI.SetRecommendedSettings(state, silent)
 	setToggle("AutoRejoin", enabled)
 
 	if enabled then
-		setToggle("EarlyBusJump", true, false, { CheckFeatureState = false })
-		UI.SetAutoEarlyBusJump(true, true)
 		TeleportMenu.ActiveTab = "Items"
 		Preferences.TeleportMenuTab = "Items"
 		TeleportMenu.LastRowsSignature = nil
