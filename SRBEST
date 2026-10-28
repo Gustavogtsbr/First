@@ -1,5 +1,5 @@
 --[[
-OP Slap Royale - merged WindUI script
+SR Claim - merged WindUI script
 
 Migration map:
 - Main tab:
@@ -172,6 +172,382 @@ local WindUI = loadstring(game:HttpGet(
 
 local Settings = nil
 local NotificationsDisabled = false
+-- Presentation-only language layer.
+local Localization = {
+ Language = "English", Connections = {},
+ Roots = setmetatable({}, { __mode = "k" }),
+ Nodes = setmetatable({}, { __mode = "k" }),
+ Portuguese = {
+  ["Main"] = "Principal",
+  ["Items"] = "Itens",
+  ["Teleports"] = "Teleportes",
+  ["Combat"] = "Combate",
+  ["Safety"] = "Segurança",
+  ["Settings"] = "Configurações",
+  ["Players"] = "Jogadores",
+  ["Locations"] = "Locais",
+  ["Teleport Menu"] = "Menu de teleporte",
+  ["Get Code + Go Barn"] = "Obter código + Ir ao celeiro",
+  ["Teleports to Barn and scans for puzzle code"] = "Teleporta ao celeiro e procura o código do enigma",
+  ["Open Teleport Menu"] = "Abrir menu de teleporte",
+  ["Items, players, and map locations"] = "Itens, jogadores e locais do mapa",
+  ["Early Bus Jump"] = "Pular cedo do ônibus",
+  ["Automatically jumps out when you are seated in the bus"] = "Pula automaticamente quando você está sentado no ônibus",
+  ["Infinite Jump"] = "Pulo infinito",
+  ["Lets you jump again while airborne"] = "Permite pular novamente no ar",
+  ["Player Stats ESP"] = "ESP de atributos dos jogadores",
+  ["Shows player health, kills, strength, and speed"] = "Mostra vida, eliminações, força e velocidade dos jogadores",
+  ["Item ESP"] = "ESP de itens",
+  ["Highlights dropped items with color tags"] = "Destaca itens no chão com etiquetas coloridas",
+  ["Auto Rejoin"] = "Reconectar automaticamente",
+  ["Rejoins after death or disconnect"] = "Reconecta após morrer ou perder a conexão",
+  ["Recommended Settings"] = "Configurações recomendadas",
+  ["Slap Aura, ESP, anti-ragdoll, sorting, rejoin, and item menu"] = "Aura de tapas, ESP, anti-ragdoll, organização, reconexão e menu de itens",
+  ["Click to collect"] = "Clique para coletar",
+  ["One click teleports to one priority item"] = "Cada clique teleporta até um item prioritário",
+  ["Auto pick up"] = "Pegar automaticamente",
+  ["Creates an invisible pickup zone around you"] = "Cria uma área invisível de coleta ao seu redor",
+  ["Auto Heal"] = "Cura automática",
+  ["Uses healing items when HP drops"] = "Usa itens de cura quando a vida diminui",
+  ["Auto Sort"] = "Organizar automaticamente",
+  ["Glove in slot 1, priority items next"] = "Luva no espaço 1, itens prioritários em seguida",
+  ["Auto Use Permanent Items"] = "Usar itens permanentes automaticamente",
+  ["Uses permanent boosts on pickup"] = "Usa melhorias permanentes ao coletar",
+  ["Use Spheres"] = "Usar esferas",
+  ["Uses all Sphere of Fury tools in your inventory"] = "Usa todas as Esferas da Fúria do inventário",
+  ["Use Cubes"] = "Usar cubos",
+  ["Uses all Cube of Ice tools in your inventory"] = "Usa todos os Cubos de Gelo do inventário",
+  ["Use All Items"] = "Usar todos os itens",
+  ["Uses every held game item quickly"] = "Usa rapidamente todos os itens carregados",
+  ["Drop All Items"] = "Soltar todos os itens",
+  ["Drops every held game item quickly"] = "Solta rapidamente todos os itens carregados",
+  ["Drop Permanent Items"] = "Soltar itens permanentes",
+  ["Drops all permanent boost items quickly"] = "Solta rapidamente os itens de melhoria permanente",
+  ["Drop Temp Items"] = "Soltar itens temporários",
+  ["Drops non-permanent held items quickly"] = "Solta rapidamente os itens não permanentes carregados",
+  ["Meteor Crate"] = "Caixa de meteoro",
+  ["Teleports to nearest meteor crate"] = "Teleporta até a caixa de meteoro mais próxima",
+  ["Teleport to the farm"] = "Teleportar para a fazenda",
+  ["Teleported to the farm."] = "Teleportado para a fazenda.",
+  ["Teleport On School Bus"] = "Teleportar para cima do ônibus escolar",
+  ["Teleports you on top of the school bus"] = "Teleporta você para cima do ônibus escolar",
+  ["Hitbox Size"] = "Tamanho da hitbox",
+  ["Adjust hitbox size (10-20)"] = "Ajusta o tamanho da hitbox (10–20)",
+  ["Expand Hitbox"] = "Expandir hitbox",
+  ["Applies expanded hitbox to players"] = "Aplica uma hitbox expandida aos jogadores",
+  ["Visualize Hitboxes"] = "Visualizar hitboxes",
+  ["Shows neon hitbox preview"] = "Mostra uma prévia das hitboxes em neon",
+  ["Slap Aura"] = "Aura de tapas",
+  ["Slaps valid nearby match players"] = "Dá tapas nos jogadores válidos próximos da partida",
+  ["Auto Slap"] = "Tapa automático",
+  ["Taps when enemy enters hitbox"] = "Dá um tapa quando o inimigo entra na hitbox",
+  ["Teleport To Lowest Health"] = "Teleportar até quem tem menos vida",
+  ["Teleports you behind the player with the lowest HP"] = "Teleporta para trás do jogador com menos vida",
+  ["Teleport To Nearest"] = "Teleportar até o mais próximo",
+  ["Teleports you behind the closest player"] = "Teleporta para trás do jogador mais próximo",
+  ["Collect Crates"] = "Coletar caixas",
+  ["Teleports under each crate and collects them in order"] = "Teleporta para baixo de cada caixa e as coleta em ordem",
+  ["Auto collect crates"] = "Coletar caixas automaticamente",
+  ["Rapidly slaps tracked meteor crates"] = "Dá tapas rápidos nas caixas de meteoro rastreadas",
+  ["Crate Aura"] = "Aura de caixas",
+  ["Slaps nearby meteor crates without teleporting"] = "Dá tapas nas caixas de meteoro próximas sem teleportar",
+  ["Early Auto Collect"] = "Coleta automática antecipada",
+  ["Starts collecting items before round begins"] = "Começa a coletar itens antes do início da rodada",
+  ["Auto optimize cooldown settings"] = "Otimizar intervalos automaticamente",
+  ["Checks ping and updates cooldown settings"] = "Verifica o ping e atualiza os intervalos",
+  ["Anti-Staff"] = "Proteção contra moderadores",
+  ["Leaves when recording keywords detected"] = "Sai ao detectar palavras relacionadas a gravação",
+  ["Hide under map"] = "Esconder sob o mapa",
+  ["Hides your character below the map"] = "Esconde seu personagem embaixo do mapa",
+  ["Anti-Ragdoll / Anti-Slap"] = "Anti-ragdoll / Anti-tapa",
+  ["Invisible cage on knockback"] = "Cria uma gaiola invisível ao sofrer empurrão",
+  ["Reset to default settings?"] = "Restaurar configurações padrão?",
+  ["Resets custom strikes, teleport debounce, and F lock"] = "Restaura o limite de TPs, intervalo de teleporte e bloqueio do F",
+  ["Custom strikes"] = "Limite personalizado de TPs",
+  ["Teleports before the strike cooldown"] = "Quantidade de teleportes antes da pausa",
+  ["Custom TP Debounce"] = "Intervalo personalizado entre TPs",
+  ["Seconds before teleporting to another object"] = "Segundos antes de teleportar para outro objeto",
+  ["Custom F Lock"] = "Bloqueio personalizado do F",
+  ["Seconds before F works again after teleporting"] = "Segundos até o F voltar a funcionar após teleportar",
+  ["Disable Notifications"] = "Desativar notificações",
+  ["Disables normal notifications"] = "Desativa as notificações normais",
+  ["Theme"] = "Tema",
+  ["Change the color theme"] = "Muda o tema de cores",
+  ["Choose the interface language"] = "Escolha o idioma da interface",
+  ["Teleport"] = "Teleporte",
+  ["School Bus"] = "Ônibus escolar",
+  ["Cooldown"] = "Intervalo",
+  ["Cooldown settings"] = "Configurações de intervalo",
+  ["Code"] = "Código",
+  ["Code Found"] = "Código encontrado",
+  ["Barn Keypad"] = "Teclado do celeiro",
+  ["Inventory"] = "Inventário",
+  ["Auto collect"] = "Coleta por clique",
+  ["Auto Use"] = "Uso automático",
+  ["Anti-Ragdoll"] = "Anti-ragdoll",
+  ["Glove TP Slap"] = "Teleporte e tapa com a luva",
+  ["Glove Size"] = "Tamanho da luva",
+  ["Anti-Acid & Lava"] = "Proteção contra ácido e lava",
+  ["Could not find your character."] = "Não foi possível encontrar seu personagem.",
+  ["Could not find a bus outside the schoolhouse area."] = "Não foi possível encontrar um ônibus fora da área da escola.",
+  ["Teleported on top of the bus."] = "Teleportado para cima do ônibus.",
+  ["Crate detected."] = "Caixa detectada.",
+  ["Already collecting crates."] = "Já está coletando caixas.",
+  ["No crates found."] = "Nenhuma caixa encontrada.",
+  ["Finished collecting crates."] = "Coleta de caixas concluída.",
+  ["Searching..."] = "Procurando...",
+  ["No code found."] = "Nenhum código encontrado.",
+  ["Found code, but could not press every keypad button."] = "Código encontrado, mas não foi possível apertar todos os botões do teclado.",
+  ["Most priority items collected. Searching all items now."] = "A maioria dos itens prioritários foi coletada. Procurando todos os itens agora.",
+  ["Auto Use Permanent Items stays off while collecting."] = "O uso automático de itens permanentes fica desligado durante a coleta.",
+  ["Permanent items collected. Continuing priority order."] = "Itens permanentes coletados. Continuando a ordem de prioridade.",
+  ["Timer hit 3. Starting priority collection."] = "O contador chegou a 3. Iniciando a coleta prioritária.",
+  ["Starting priority collection."] = "Iniciando a coleta prioritária.",
+  ["Not in lobby"] = "Você não está no lobby",
+  ["You cannot start this while already in the bus."] = "Não é possível iniciar quando você já está no ônibus.",
+  ["No countdown detected."] = "Nenhuma contagem regressiva detectada.",
+  ["Must be activated before there are 3 seconds left."] = "Ative antes de faltarem 3 segundos.",
+  ["Turn Auto collect off first."] = "Desative a coleta por clique primeiro.",
+  ["Waiting for countdown to end."] = "Aguardando o fim da contagem regressiva.",
+  ["Turn Early Auto Collect off first."] = "Desative a coleta automática antecipada primeiro.",
+  ["No priority item ready. Click again to retry."] = "Nenhum item prioritário disponível. Clique novamente para tentar.",
+  ["Backpack not found."] = "Mochila não encontrada.",
+  ["Glove first, priority items next, backpack items kept later."] = "Luva primeiro, itens prioritários em seguida e demais itens depois.",
+  ["Auto Sort enabled and sorted."] = "Organização automática ativada e itens organizados.",
+  ["Target player is unavailable or ragdolled."] = "O jogador alvo está indisponível ou caído.",
+  ["No valid lowest health player found."] = "Nenhum jogador válido com menos vida encontrado.",
+  ["No valid nearest player found."] = "Nenhum jogador próximo válido encontrado.",
+  ["Equip your glove first, then adjust the slider."] = "Equipe a luva primeiro e depois ajuste o controle.",
+  ["Wait until the current auto collect movement lock ends."] = "Aguarde o fim do bloqueio de movimento da coleta automática.",
+  ["Moved under the map."] = "Movido para baixo do mapa.",
+  ["Moved back above ground."] = "Movido de volta para cima do chão.",
+  ["Already checking ping."] = "O ping já está sendo verificado.",
+  ["Checking ping and optimizing settings."] = "Verificando o ping e otimizando as configurações.",
+  ["Disabled."] = "Desativado.",
+  ["Finding first priority item to land on."] = "Procurando o primeiro item prioritário para pousar.",
+  ["F locked for 10 seconds after early bus jump."] = "F bloqueado por 10 segundos após pular cedo do ônibus.",
+  ["F unlocked. Early Auto Collect starts in 1 second."] = "F desbloqueado. A coleta antecipada começa em 1 segundo.",
+  ["Could not stay on the item landing position."] = "Não foi possível permanecer na posição de pouso do item.",
+  ["No priority item was ready to teleport to."] = "Nenhum item prioritário estava disponível para teleporte.",
+  ["This WindUI build did not expose a theme setter."] = "Esta versão do WindUI não oferece troca de tema.",
+  ["Custom teleport settings reset to defaults."] = "Configurações de teleporte restauradas para o padrão.",
+  ["Custom strikes needs a number."] = "O limite de TPs precisa ser um número.",
+  ["Custom TP Debounce needs a number."] = "O intervalo entre TPs precisa ser um número.",
+  ["Custom F Lock needs a number."] = "O bloqueio do F precisa ser um número.",
+  ["Wait after jumping before teleporting."] = "Aguarde após pular antes de teleportar.",
+  ["Recover from ragdoll before teleporting."] = "Recupere-se da queda antes de teleportar.",
+  ["Wait after landing from the bus."] = "Aguarde após pousar do ônibus.",
+  ["Priority list finished."] = "Lista de prioridades concluída.",
+  ["Barn"] = "Celeiro",
+  ["Beach"] = "Praia",
+  ["Acid"] = "Ácido",
+  ["Bob Cave"] = "Caverna do Bob",
+  ["Bone Pit"] = "Poço de ossos",
+  ["Crystal"] = "Cristal",
+  ["Forest"] = "Floresta",
+  ["Lighthouse"] = "Farol",
+  ["School"] = "Escola",
+  ["Shop"] = "Loja",
+  ["Towers"] = "Torres",
+  ["Tunnels"] = "Túneis",
+  ["Volcano"] = "Vulcão",
+  ["Watch Tower"] = "Torre de vigia",
+  ["Apple"] = "Maçã",
+  ["Bandage"] = "Bandagem",
+  ["Bomb"] = "Bomba",
+  ["Bombs"] = "Bombas",
+  ["Bull's Essence"] = "Essência de Touro",
+  ["Cube of Ice"] = "Cubo de Gelo",
+  ["First Aid Kit"] = "Kit de primeiros socorros",
+  ["Forcefield Crystal"] = "Cristal de campo de força",
+  ["Frog Potion"] = "Poção de Sapo",
+  ["Gravitation Shard"] = "Fragmento de Gravitação",
+  ["Healing Potion"] = "Poção de Cura",
+  ["Lightning Potion"] = "Poção de Relâmpago",
+  ["Potion of Strength"] = "Poção de Força",
+  ["Speed Potion"] = "Poção de Velocidade",
+  ["Sphere of Fury"] = "Esfera da Fúria",
+  ["Tomahawk"] = "Machadinha",
+  ["True Power"] = "Poder Verdadeiro",
+  ["Auto collect crates enabled."] = "Coletar caixas automaticamente ativado.",
+  ["Auto collect crates disabled."] = "Coletar caixas automaticamente desativado.",
+  ["Crate Aura enabled."] = "Aura de caixas ativado.",
+  ["Crate Aura disabled."] = "Aura de caixas desativado.",
+  ["Auto pick up enabled."] = "Pegar automaticamente ativado.",
+  ["Auto pick up disabled."] = "Pegar automaticamente desativado.",
+  ["Auto Use Permanent Items enabled."] = "Usar itens permanentes automaticamente ativado.",
+  ["Auto Use Permanent Items disabled."] = "Usar itens permanentes automaticamente desativado.",
+  ["Early Auto Collect enabled."] = "Coleta automática antecipada ativado.",
+  ["Early Auto Collect disabled."] = "Coleta automática antecipada desativado.",
+  ["Auto Sort enabled."] = "Organizar automaticamente ativado.",
+  ["Auto Sort disabled."] = "Organizar automaticamente desativado.",
+  ["Auto Heal enabled."] = "Cura automática ativado.",
+  ["Auto Heal disabled."] = "Cura automática desativado.",
+  ["Auto Slap enabled."] = "Tapa automático ativado.",
+  ["Auto Slap disabled."] = "Tapa automático desativado.",
+  ["Slap Aura enabled."] = "Aura de tapas ativado.",
+  ["Slap Aura disabled."] = "Aura de tapas desativado.",
+  ["Glove TP Slap enabled."] = "Teleporte e tapa com a luva ativado.",
+  ["Glove TP Slap disabled."] = "Teleporte e tapa com a luva desativado.",
+  ["Anti-Ragdoll enabled."] = "Anti-ragdoll ativado.",
+  ["Anti-Ragdoll disabled."] = "Anti-ragdoll desativado.",
+  ["Anti-Staff enabled."] = "Proteção contra moderadores ativado.",
+  ["Anti-Staff disabled."] = "Proteção contra moderadores desativado.",
+  ["Infinite Jump enabled."] = "Pulo infinito ativado.",
+  ["Infinite Jump disabled."] = "Pulo infinito desativado.",
+  ["Player Stats ESP enabled."] = "ESP de atributos dos jogadores ativado.",
+  ["Player Stats ESP disabled."] = "ESP de atributos dos jogadores desativado.",
+  ["Item ESP enabled."] = "ESP de itens ativado.",
+  ["Item ESP disabled."] = "ESP de itens desativado.",
+  ["Auto rejoin enabled."] = "Reconexão automática ativado.",
+  ["Auto rejoin disabled."] = "Reconexão automática desativado.",
+  ["Auto bus jump enabled."] = "Pulo automático do ônibus ativado.",
+  ["Auto bus jump disabled."] = "Pulo automático do ônibus desativado.",
+  ["Dark"] = "Escuro",
+  ["Light"] = "Claro",
+  ["Rose"] = "Rosa",
+  ["Crimson"] = "Carmesim",
+  ["Plant"] = "Planta",
+  ["Sky"] = "Céu",
+  ["Violet"] = "Violeta",
+  ["Amber"] = "Âmbar",
+  ["Neon Orchid"] = "Orquídea neon",
+  ["Cyber Lime"] = "Lima cibernética",
+  ["Solar Flare"] = "Explosão solar",
+  ["Ocean Sync"] = "Sintonia oceânica",
+  ["Rose Terminal"] = "Terminal rosa",
+  ["Midnight Purple"] = "Roxo da meia-noite",
+  ["Sakura"] = "Cerejeira",
+  ["Arctic"] = "Ártico",
+  ["Ember"] = "Brasa",
+  ["Toxic"] = "Tóxico",
+  ["Phantom"] = "Fantasma",
+  ["Cotton Candy"] = "Algodão-doce",
+  ["Void"] = "Vazio",
+  ["Sunset"] = "Pôr do sol",
+  ["Matrix"] = "Matrix",
+ },
+ Fragments = {
+  {"Round started. Pausing collection for ", "A rodada começou. Pausando a coleta por "},
+  {" seconds before pressing F again.", " segundos antes de apertar F novamente."},
+  {" disappeared before teleporting.", " desapareceu antes do teleporte."},
+  {"Finding fullest server after ", "Procurando o servidor mais cheio após "},
+  {" is not currently available.", " não está disponível no momento."},
+  {" before teleporting again.", " antes de teleportar novamente."},
+  {"Could not find location: ", "Não foi possível encontrar o local: "},
+  {"Joining fullest server (", "Entrando no servidor mais cheio ("},
+  {"Entered and submitted ", "Digitado e enviado "},
+  {"Could not drop any ", "Não foi possível soltar "},
+  {" remote not found.", " não encontrado."},
+  {"Could not use any ", "Não foi possível usar "},
+  {"Theme changed to ", "Tema alterado para "},
+  {" safety covers.", " coberturas de proteção."},
+  {" (none spawned)", " (nenhuma disponível)"},
+  {"Teleported to ", "Teleportado para "},
+  {"Optimized for ", "Otimizado para "},
+  {"Joining place ", "Entrando no lugar "},
+  {" request sent.", " solicitado."},
+  {" (equip glove)", " (equipe a luva)"},
+  {"Hitbox Size: ", "Tamanho da hitbox: "},
+  {"Glove Size: ", "Tamanho da luva: "},
+  {"Collecting ", "Coletando "},
+  {" crate(s).", " caixa(s)."},
+  {"Collected ", "Coletado: "},
+  {"Strength: ", "Força: "},
+  {" seconds.", " segundos."},
+  {" ms ping.", " ms de ping."},
+  {"Failed: ", "Falha: "},
+  {"Dropped ", "Solto(s): "},
+  {"Enabled ", "Ativadas: "},
+  {"Health: ", "Vida: "},
+  {" found.", " encontrado."},
+  {"Kills: ", "Eliminações: "},
+  {"Speed: ", "Velocidade: "},
+  {"Wait ", "Aguarde "},
+  {"Used ", "Usado(s): "},
+  {"No ", "Nenhum "},
+ },
+}
+function Localization.Text(value)
+ local text = tostring(value or "")
+ if Localization.Language == "English" then return text end
+ if Localization.Portuguese[text] then return Localization.Portuguese[text] end
+ local result, position = {}, 1
+ while position <= #text do
+  local first, last, replacement
+  for _, pair in ipairs(Localization.Fragments) do
+   local a,b = string.find(text, pair[1], position, true)
+   if a and (not first or a < first or (a == first and b > last)) then
+    first,last,replacement = a,b,pair[2]
+   end
+  end
+  if not first then table.insert(result, string.sub(text, position)); break end
+  table.insert(result, string.sub(text, position, first - 1))
+  table.insert(result, replacement)
+  position = last + 1
+ end
+ return table.concat(result)
+end
+function Localization.Render(object, state)
+ if not object.Parent then return end
+ local text = state.Source
+ state.Rendered = (text == "Language" or text == "English" or text == "Português Brasil") and text or Localization.Text(text)
+ if object.Text ~= state.Rendered then object.Text = state.Rendered end
+end
+function Localization.Track(object)
+ if Localization.Nodes[object] or not (object:IsA("TextLabel") or object:IsA("TextButton")) then return end
+ local state = { Source = object.Text }
+ Localization.Nodes[object] = state
+ Localization.Render(object,state)
+ state.Connection = object:GetPropertyChangedSignal("Text"):Connect(function()
+  if object.Text == state.Rendered then return end
+  state.Source = object.Text
+  Localization.Render(object,state)
+ end)
+ state.DestroyConnection = object.Destroying:Connect(function()
+  state.Connection:Disconnect()
+  state.DestroyConnection:Disconnect()
+  Localization.Nodes[object] = nil
+ end)
+end
+function Localization.Attach(root)
+ if not root or Localization.Roots[root] then return end
+ Localization.Roots[root] = true
+ Localization.Track(root)
+ for _,object in ipairs(root:GetDescendants()) do Localization.Track(object) end
+ table.insert(Localization.Connections,root.DescendantAdded:Connect(Localization.Track))
+end
+function Localization.Refresh()
+ for object,state in pairs(Localization.Nodes) do Localization.Render(object,state) end
+end
+function Localization.Discover()
+ local containers = {}
+ local playerGui = player:FindFirstChildOfClass("PlayerGui")
+ if playerGui then table.insert(containers,playerGui) end
+ pcall(function() table.insert(containers,game:GetService("CoreGui")) end)
+ pcall(function() if type(gethui) == "function" then table.insert(containers,gethui()) end end)
+ for _,container in ipairs(containers) do
+  pcall(function()
+   for _,object in ipairs(container:GetDescendants()) do
+    if (object:IsA("TextLabel") or object:IsA("TextButton")) and object.Text == "SR Claim" then
+     local screen = object:FindFirstAncestorWhichIsA("ScreenGui")
+     if screen then Localization.Attach(screen); Localization.FoundMain = true end
+    end
+   end
+  end)
+ end
+end
+function Localization.Cleanup()
+ Localization.Active = false
+ for _,connection in ipairs(Localization.Connections) do connection:Disconnect() end
+ table.clear(Localization.Connections)
+ for object,state in pairs(Localization.Nodes) do
+  state.Connection:Disconnect()
+  state.DestroyConnection:Disconnect()
+  Localization.Nodes[object] = nil
+ end
+end
+
 local Notify = {}
 
 function Notify.Show(title, message, kind, icon, duration, important)
@@ -180,8 +556,8 @@ function Notify.Show(title, message, kind, icon, duration, important)
 	end
 
 	local payload = {
-		Title = tostring(title or "OP Slap Royale"),
-		Content = tostring(message or ""),
+		Title = Localization.Text(title or "SR Claim"),
+		Content = Localization.Text(message or ""),
 		Icon = icon or "bell",
 		Duration = duration or (important and 4 or 3),
 	}
@@ -196,7 +572,7 @@ function Notify.Show(title, message, kind, icon, duration, important)
 
 	if not ok then
 		pcall(function()
-			warn("[OP Slap Royale] " .. payload.Title .. ": " .. payload.Content)
+			warn("[SR Claim] " .. payload.Title .. ": " .. payload.Content)
 		end)
 	end
 end
@@ -3102,7 +3478,7 @@ function Items.StartCrateWatcher()
 			end
 
 			Items.CrateWatcherStarting = false
-			print("[OP Slap Royale] Crate watcher could not find Shipments.Crates.")
+			print("[SR Claim] Crate watcher could not find Shipments.Crates.")
 		end)
 
 		return
@@ -8054,6 +8430,18 @@ end
 
 loadPreferences()
 ensurePreferenceTables()
+Localization.Language = Preferences.Language == "Português Brasil" and "Português Brasil" or "English"
+Preferences.Language = Localization.Language
+Preferences.Dropdowns.Language = Localization.Language
+function UI.SetLanguage(value)
+ if type(value) == "table" then value = value[1] or value.Value end
+ if value ~= "English" and value ~= "Português Brasil" then return end
+ Localization.Language = value
+ Preferences.Language = value
+ Preferences.Dropdowns.Language = value
+ queueSavePreferences()
+ Localization.Refresh()
+end
 Preferences.Toggles.AutoCollect = false
 Preferences.Toggles.HideUnderMap = false
 Preferences.Toggles.AutoPickup = false
@@ -8394,10 +8782,33 @@ function Teleport.RunAutoOptimizeCooldownSettings(silent)
 	end
 end
 
+-- Visual only: blend theme surfaces 10% toward black.
+pcall(function()
+	local themes = WindUI:GetThemes()
+	local adjustedThemes = {}
+	for name, theme in pairs(themes) do
+		if type(theme) == "table" then
+			local adjusted = table.clone(theme)
+			adjusted.Name = adjusted.Name or name
+			for _, key in ipairs({ "Background" }) do
+				local color = adjusted[key]
+				if type(color) == "string" then
+					color = Color3.fromHex(color)
+				end
+				if typeof(color) == "Color3" then
+					adjusted[key] = color:Lerp(Color3.new(0, 0, 0), 0.1)
+				end
+			end
+			table.insert(adjustedThemes, adjusted)
+		end
+	end
+	for _, theme in ipairs(adjustedThemes) do
+		WindUI:AddTheme(theme)
+	end
+end)
+
 local WindUIWindow = WindUI:CreateWindow({
-	Title = "OP Slap Royale",
-	Icon = "crown",
-	Author = "Merged functions",
+	Title = "SR Claim",
 	Folder = "OPSlapRoyale",
 	Size = UDim2.fromOffset(580, 460),
 	ToggleKey = Enum.KeyCode.T,
@@ -8431,7 +8842,7 @@ local function safeTask(fn, ...)
 		end)
 
 		if not ok then
-			createNotification("OP Slap Royale", tostring(err), "Error", nil, 5, true)
+			createNotification("SR Claim", tostring(err), "Error", nil, 5, true)
 		end
 	end)
 end
@@ -9233,6 +9644,7 @@ function ESP.Create(targetPlayer)
 	label.TextSize = 28
 	label.TextWrapped = true
 	label.RichText = true
+	Localization.Track(label)
 	label.Parent = billboard
 
 	task.spawn(function()
@@ -9490,6 +9902,7 @@ function ItemESP.CreateOrUpdate(object, itemName, part)
 	row.Highlight.FillColor = color
 	row.Highlight.OutlineColor = color
 	row.Billboard.Adornee = part
+	Localization.Track(row.Label)
 	row.Label.Text = itemName
 	row.Label.TextColor3 = color
 end
@@ -10429,7 +10842,7 @@ local function findWindUIMainWindowInfo()
 	for _, object in ipairs(playerGui:GetDescendants()) do
 		if not isLauncherDescendant(object)
 			and (object:IsA("TextLabel") or object:IsA("TextButton"))
-			and object.Text == "OP Slap Royale" then
+			and object.Text == "SR Claim" then
 			local screenGui = getScreenGuiAncestor(object)
 
 			if screenGui then
@@ -10520,7 +10933,7 @@ local function ensureMinimizedLauncher()
 	container.AnchorPoint = Vector2.new(0.5, 0)
 	container.Position = UDim2.new(0.5, 0, 0, isTouchDevice and 34 or 26)
 	container.Size = UDim2.fromOffset(isTouchDevice and 74 or 66, isTouchDevice and 48 or 42)
-	container.BackgroundColor3 = Color3.fromRGB(13, 23, 20)
+	container.BackgroundColor3 = Color3.fromRGB(12, 21, 18)
 	container.BackgroundTransparency = 0.06
 	container.BorderSizePixel = 0
 	container.Active = true
@@ -10773,7 +11186,7 @@ local function openTeleportSideMenu()
 	window.AnchorPoint = Vector2.new(1, 0.5)
 	window.Position = UDim2.new(1, isTouchDevice and -8 or -14, 0.5, 0)
 	window.Size = UDim2.fromOffset(width, height)
-	window.BackgroundColor3 = Color3.fromRGB(13, 23, 20)
+	window.BackgroundColor3 = Color3.fromRGB(12, 21, 18)
 	window.BorderSizePixel = 0
 	window.Parent = screenGui
 
@@ -10880,6 +11293,7 @@ local function openTeleportSideMenu()
 		closeTeleportSideMenu(false)
 	end)
 
+	Localization.Attach(screenGui)
 	TeleportMenu.Gui = screenGui
 	TeleportMenu.Window = window
 	TeleportMenu.Rows = rows
@@ -11120,6 +11534,28 @@ AddButton(TabItems, "Drop Temp Items", "Drops non-permanent held items quickly",
 AddButton(TabItems, "Meteor Crate", "Teleports to nearest meteor crate", "box", Items.TeleportToCrate)
 
 -- Teleports
+AddButton(TabTeleports, "Teleport to the farm", "X: 489.85 | Y: 90.97 | Z: 318.56", "map-pin", function()
+	if not Teleport.CanTeleport(Items.TeleportDebounce, true) then
+		return
+	end
+
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root then
+		createNotification("Teleport", "Could not find your character.", "Error")
+		return
+	end
+
+	local targetCFrame = CFrame.new(489.85, 90.97, 318.56)
+	if not Teleport.CanTeleport(Items.TeleportDebounce, true) then
+		return
+	end
+	Teleport.AddStrike()
+	Teleport.MoveRoot(root, targetCFrame)
+	Teleport.StartFBlock()
+	createNotification("Teleport", "Teleported to the farm.", "Success")
+end)
+
 AddButton(TabTeleports, "Teleport On School Bus", "Teleports you on top of the school bus", "bus-front", Teleport.ToSchoolBusTop)
 
 -- Combat
@@ -11145,6 +11581,7 @@ AddToggle(TabSafety, "Hide under map", "Hides your character below the map", fal
 AddToggle(TabSafety, "Anti-Ragdoll / Anti-Slap", "Invisible cage on knockback", false, Combat.SetAntiSlap, "AntiRagdoll")
 
 -- Settings
+AddDropdown(TabSettings, "Language", "Choose the interface language", { "Português Brasil", "English" }, Localization.Language, UI.SetLanguage, "Language")
 AddButton(TabSettings, "Reset to default settings?", "Resets custom strikes, teleport debounce, and F lock", "rotate-ccw", function()
 	Teleport.ResetCustomSettings()
 	UI.SyncCustomSettingInputVisuals()
@@ -11213,8 +11650,18 @@ if Preferences.TeleportMenuOpen then
 	task.defer(openTeleportSideMenu)
 end
 
+Localization.Active = true
+Localization.Discover()
+task.spawn(function()
+ while Localization.Active and not Localization.FoundMain do
+  Localization.Discover()
+  task.wait(0.25)
+ end
+end)
+
 if sharedEnvironment then
 	sharedEnvironment.OPSlapRoyaleCleanup = function()
+		Localization.Cleanup()
 		pcall(function() Items.CleanupAutomation() end)
 		pcall(function() Combat.SetAutoGloveTap(false) end)
 		pcall(function() Combat.SetSlapAura(false, true) end)
