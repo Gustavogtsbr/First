@@ -51,7 +51,7 @@ Migration map:
   * Preferences auto-save -> toggles, sliders, dropdowns, theme, and teleport menu state
 
 Internal helper functions from the non-UI script are preserved and are not exposed as UI controls.
-Old no-op callbacks were not carried over.
+Old no-op callbacks were not carried over
 ]]
 
 --[[
