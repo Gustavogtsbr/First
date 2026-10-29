@@ -1,0 +1,231 @@
+local source = [==[
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+repeat task.wait() until game.Players.LocalPlayer.Character ~= nil and game.Players.LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+if game.Players.LocalPlayer.Character:FindFirstChild("entered") == nil then
+    repeat task.wait()
+        firetouchinterest(game.Players.LocalPlayer.Character.HumanoidRootPart, workspace.Lobby.Teleport1, 0)
+        firetouchinterest(game.Players.LocalPlayer.Character.HumanoidRootPart, workspace.Lobby.Teleport1, 1)
+    until game.Players.LocalPlayer.Character:FindFirstChild("entered")
+end
+for i, v in ipairs(workspace.Arena.island5.Slapples:GetDescendants()) do
+                if v.Name == "Glove" and v:FindFirstChildWhichIsA("TouchTransmitter") then
+                    firetouchinterest(game.Players.LocalPlayer.Character.HumanoidRootPart, v, 0)
+        firetouchinterest(game.Players.LocalPlayer.Character.HumanoidRootPart, v, 1)
+                end
+            end
+local serverList = {}
+for _, v in ipairs(game:GetService("HttpService"):JSONDecode(game:HttpGetAsync("https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100")).data) do
+	if v.playing and type(v) == "table" and v.maxPlayers > v.playing and v.id ~= game.JobId then
+		serverList[#serverList + 1] = v.id
+	end
+end
+if #serverList > 0 then
+	game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, serverList[math.random(1, #serverList)])
+else
+    error("No servers found")
+end
+]==]
+
+local runner = [==[
+local source, runner = ...
+
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+local Players = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
+
+repeat task.wait() until Players.LocalPlayer
+local player = Players.LocalPlayer
+
+local environment = getgenv and getgenv() or _G
+local previous = environment.SlappleAutoController
+if previous then
+    previous.destroy()
+end
+
+local queue = queue_on_teleport
+    or (syn and syn.queue_on_teleport)
+    or (fluxus and fluxus.queue_on_teleport)
+
+local execute, compileError = loadstring(source)
+assert(execute, compileError)
+
+local enabled = false
+local destroyed = false
+local teleporting = false
+local queued = false
+local worker
+local connections = {}
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "SlappleAutoHUD"
+gui.ResetOnSpawn = false
+gui.DisplayOrder = 100
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.fromOffset(210, 110)
+frame.Position = UDim2.new(0, 16, 0.5, -55)
+frame.BackgroundColor3 = Color3.fromRGB(25, 27, 34)
+frame.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 12)
+corner.Parent = frame
+
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(1, -16, 0, 44)
+status.Position = UDim2.fromOffset(8, 4)
+status.BackgroundTransparency = 1
+status.TextColor3 = Color3.fromRGB(240, 240, 245)
+status.Font = Enum.Font.GothamMedium
+status.TextSize = 14
+status.TextWrapped = true
+status.Parent = frame
+
+local button = Instance.new("TextButton")
+button.Size = UDim2.new(1, -24, 0, 42)
+button.Position = UDim2.fromOffset(12, 56)
+button.TextColor3 = Color3.new(1, 1, 1)
+button.Font = Enum.Font.GothamBold
+button.TextSize = 16
+button.Parent = frame
+
+local buttonCorner = Instance.new("UICorner")
+buttonCorner.CornerRadius = UDim.new(0, 9)
+buttonCorner.Parent = button
+
+local function updateButton()
+    button.Text = enabled and "STOP" or "ATIVAR"
+    button.BackgroundColor3 = enabled
+        and Color3.fromRGB(205, 65, 75)
+        or Color3.fromRGB(40, 160, 95)
+end
+
+local function stop()
+    enabled = false
+
+    if worker then
+        pcall(task.cancel, worker)
+        worker = nil
+    end
+
+    status.Text = "Parado"
+    updateButton()
+end
+
+local function start()
+    if enabled or destroyed then
+        return
+    end
+
+    enabled = true
+    updateButton()
+
+    worker = task.spawn(function()
+        while enabled and not destroyed do
+            status.Text = "Script principal inicia em 5s"
+            task.wait(5)
+
+            if not enabled or destroyed then
+                break
+            end
+
+            while teleporting and enabled and not destroyed do
+                task.wait(0.2)
+            end
+
+            if not enabled or destroyed then
+                break
+            end
+
+            status.Text = "Script principal ativo"
+
+            local success, executionError = pcall(execute)
+
+            if not enabled or destroyed then
+                break
+            end
+
+            if not success then
+                warn("Slapple: " .. tostring(executionError))
+                status.Text = "Falhou • preparando nova tentativa"
+            else
+                status.Text = "Aguardando troca de servidor"
+                task.wait(10)
+            end
+        end
+    end)
+end
+
+connections[#connections + 1] = button.Activated:Connect(function()
+    if enabled then
+        stop()
+    else
+        start()
+    end
+end)
+
+connections[#connections + 1] = player.OnTeleport:Connect(function(state)
+    if state == Enum.TeleportState.Failed then
+        teleporting = false
+        return
+    end
+
+    if not enabled then
+        return
+    end
+
+    teleporting = true
+    status.Text = "Indo para o próximo servidor"
+
+    if queue and not queued then
+        local success, queueError = pcall(queue, string.format(
+            "loadstring(%q)(%q, %q)",
+            runner,
+            source,
+            runner
+        ))
+
+        queued = success
+
+        if not success then
+            warn("Falha ao enfileirar: " .. tostring(queueError))
+        end
+    end
+end)
+
+connections[#connections + 1] =
+    TeleportService.TeleportInitFailed:Connect(function(failedPlayer)
+        if failedPlayer == player then
+            teleporting = false
+        end
+    end)
+
+local controller = {}
+
+controller.destroy = function()
+    destroyed = true
+    stop()
+
+    for _, connection in ipairs(connections) do
+        connection:Disconnect()
+    end
+
+    gui:Destroy()
+end
+
+environment.SlappleAutoController = controller
+
+if not queue then
+    warn("queue_on_teleport indisponível: não será possível continuar automaticamente no próximo servidor.")
+end
+
+start()
+]==]
+
+loadstring(runner)(source, runner)
