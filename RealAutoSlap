@@ -1,0 +1,359 @@
+local source = [==[
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+repeat task.wait() until game.Players.LocalPlayer.Character ~= nil and game.Players.LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+if game.Players.LocalPlayer.Character:FindFirstChild("entered") == nil then
+    repeat task.wait()
+        firetouchinterest(game.Players.LocalPlayer.Character.HumanoidRootPart, workspace.Lobby.Teleport1, 0)
+        firetouchinterest(game.Players.LocalPlayer.Character.HumanoidRootPart, workspace.Lobby.Teleport1, 1)
+    until game.Players.LocalPlayer.Character:FindFirstChild("entered")
+end
+for i, v in ipairs(workspace.Arena.island5.Slapples:GetDescendants()) do
+                if v.Name == "Glove" and v:FindFirstChildWhichIsA("TouchTransmitter") then
+                    firetouchinterest(game.Players.LocalPlayer.Character.HumanoidRootPart, v, 0)
+        firetouchinterest(game.Players.LocalPlayer.Character.HumanoidRootPart, v, 1)
+                end
+            end
+]==]
+
+local runner = [==[
+local source, runner = ...
+
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+
+repeat task.wait() until Players.LocalPlayer
+local player = Players.LocalPlayer
+
+local environment = getgenv and getgenv() or _G
+if environment.SlappleAutoController then
+    environment.SlappleAutoController.destroy()
+end
+
+local queue = queue_on_teleport
+    or (syn and syn.queue_on_teleport)
+    or (fluxus and fluxus.queue_on_teleport)
+
+local execute, compileError = loadstring(source)
+assert(execute, compileError)
+
+local COLLECTION_DELAY = 5
+local SEARCH_AND_JOIN_DELAY = 5.1
+local RETRY_DELAY = 0.1
+local MIN_PLAYERS = 4
+
+local enabled = false
+local destroyed = false
+local queued = false
+local teleporting = false
+local generation = 0
+local nextAttemptAt = 0
+local lastServer
+local tasks = {}
+local connections = {}
+local rejectedUntil = {}
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "SlappleAutoHUD"
+gui.ResetOnSpawn = false
+gui.DisplayOrder = 100
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.fromOffset(260, 116)
+frame.Position = UDim2.new(0, 16, 0.5, -58)
+frame.BackgroundColor3 = Color3.fromRGB(25, 27, 34)
+frame.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 12)
+corner.Parent = frame
+
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(1, -16, 0, 48)
+status.Position = UDim2.fromOffset(8, 4)
+status.BackgroundTransparency = 1
+status.TextColor3 = Color3.fromRGB(240, 240, 245)
+status.Font = Enum.Font.GothamMedium
+status.TextSize = 14
+status.TextWrapped = true
+status.Parent = frame
+
+local button = Instance.new("TextButton")
+button.Size = UDim2.new(1, -24, 0, 42)
+button.Position = UDim2.fromOffset(12, 62)
+button.TextColor3 = Color3.new(1, 1, 1)
+button.Font = Enum.Font.GothamBold
+button.TextSize = 16
+button.Parent = frame
+
+local buttonCorner = Instance.new("UICorner")
+buttonCorner.CornerRadius = UDim.new(0, 9)
+buttonCorner.Parent = button
+
+local function updateButton()
+    button.Text = enabled and "STOP" or "ATIVAR"
+    button.BackgroundColor3 = enabled
+        and Color3.fromRGB(205, 65, 75)
+        or Color3.fromRGB(40, 160, 95)
+end
+
+local function active(token)
+    return enabled and not destroyed and generation == token
+end
+
+local function cancelTasks()
+    for _, thread in ipairs(tasks) do
+        pcall(task.cancel, thread)
+    end
+    tasks = {}
+end
+
+local function queueNext()
+    if queued or not queue then
+        return
+    end
+
+    local success, queueError = pcall(queue, string.format(
+        "loadstring(%q)(%q, %q)",
+        runner, source, runner
+    ))
+
+    queued = success
+
+    if not success then
+        warn("Falha ao enfileirar: " .. tostring(queueError))
+    end
+end
+
+local function teleportFailed()
+    if lastServer then
+        rejectedUntil[lastServer] = os.clock() + 30
+        lastServer = nil
+    end
+
+    teleporting = false
+    nextAttemptAt = os.clock() + RETRY_DELAY
+
+    if enabled then
+        status.Text = "Servidor indisponível • tentando outro"
+    end
+end
+
+local function stop()
+    enabled = false
+    generation = generation + 1
+    cancelTasks()
+    status.Text = "Parado"
+    updateButton()
+end
+
+local function start()
+    if enabled or destroyed then
+        return
+    end
+
+    cancelTasks()
+    enabled = true
+    generation = generation + 1
+    nextAttemptAt = 0
+
+    local token = generation
+    local startedAt = os.clock()
+    local candidates = {}
+    local searching = false
+    local collectionStarted = false
+    local collectionThread
+    local cursor
+
+    updateButton()
+
+    local function beginSearch()
+        if searching or not active(token) then
+            return
+        end
+
+        searching = true
+
+        tasks[#tasks + 1] = task.spawn(function()
+            local url = "https://games.roblox.com/v1/games/"
+                .. game.PlaceId
+                .. "/servers/Public?sortOrder=Desc&limit=100"
+
+            if cursor then
+                url = url .. "&cursor="
+                    .. HttpService:UrlEncode(cursor)
+            end
+
+            local success, result = pcall(function()
+                return HttpService:JSONDecode(game:HttpGetAsync(url))
+            end)
+
+            if not active(token) then
+                return
+            end
+
+            if success and type(result) == "table"
+                and type(result.data) == "table" then
+
+                for _, server in ipairs(result.data) do
+                    if type(server) == "table"
+                        and type(server.id) == "string"
+                        and type(server.playing) == "number"
+                        and type(server.maxPlayers) == "number"
+                        and server.playing >= MIN_PLAYERS
+                        and server.playing < server.maxPlayers
+                        and server.id ~= game.JobId
+                        and (rejectedUntil[server.id] or 0)
+                            <= os.clock() then
+
+                        candidates[#candidates + 1] = server.id
+                    end
+                end
+
+                local nextCursor = result.nextPageCursor
+
+                if type(nextCursor) == "string"
+                    and nextCursor ~= ""
+                    and nextCursor ~= cursor then
+                    cursor = nextCursor
+                else
+                    cursor = nil
+                end
+            else
+                cursor = nil
+            end
+
+            searching = false
+
+            if #candidates == 0 then
+                nextAttemptAt = os.clock() + RETRY_DELAY
+            end
+        end)
+    end
+
+    tasks[#tasks + 1] = task.spawn(function()
+        while active(token) do
+            local elapsed = os.clock() - startedAt
+
+            if elapsed >= COLLECTION_DELAY
+                and not collectionStarted then
+
+                collectionStarted = true
+
+                collectionThread = task.spawn(function()
+                    local success, executionError = pcall(execute)
+
+                    if not success then
+                        warn("Coleta: " .. tostring(executionError))
+                    end
+                end)
+
+                tasks[#tasks + 1] = collectionThread
+            end
+
+            if elapsed < SEARCH_AND_JOIN_DELAY then
+                status.Text = string.format(
+                    "Coleta: %.1fs\nBusca/entrada: %.1fs",
+                    math.max(0, COLLECTION_DELAY - elapsed),
+                    math.max(0, SEARCH_AND_JOIN_DELAY - elapsed)
+                )
+            elseif not teleporting
+                and os.clock() >= nextAttemptAt then
+
+                -- Aos 5,1s, começa a buscar e entra assim
+                -- que a consulta retornar um servidor válido.
+                if #candidates > 0 then
+                    local serverId = table.remove(candidates, 1)
+
+                    if (rejectedUntil[serverId] or 0) <= os.clock() then
+                        if collectionThread then
+                            pcall(task.cancel, collectionThread)
+                            collectionThread = nil
+                        end
+
+                        lastServer = serverId
+                        queueNext()
+                        teleporting = true
+
+                        status.Text = "Entrando em servidor com 4+ jogadores"
+
+                        local success = pcall(function()
+                            TeleportService:TeleportToPlaceInstance(
+                                game.PlaceId,
+                                serverId,
+                                player
+                            )
+                        end)
+
+                        if not success then
+                            teleportFailed()
+                        end
+                    end
+                elseif not searching then
+                    status.Text = "Buscando servidor com 4+ jogadores..."
+                    beginSearch()
+                end
+            end
+
+            task.wait(0.01)
+        end
+    end)
+end
+
+connections[#connections + 1] = button.Activated:Connect(function()
+    if enabled then
+        stop()
+    else
+        start()
+    end
+end)
+
+connections[#connections + 1] = player.OnTeleport:Connect(function(state)
+    if state == Enum.TeleportState.Failed then
+        teleportFailed()
+        return
+    end
+
+    if enabled then
+        teleporting = true
+        queueNext()
+    end
+end)
+
+connections[#connections + 1] =
+    TeleportService.TeleportInitFailed:Connect(function(failedPlayer)
+        if failedPlayer == player then
+            teleportFailed()
+        end
+    end)
+
+local controller = {}
+
+controller.destroy = function()
+    stop()
+    destroyed = true
+
+    for _, connection in ipairs(connections) do
+        connection:Disconnect()
+    end
+
+    gui:Destroy()
+end
+
+environment.SlappleAutoController = controller
+
+if not queue then
+    warn("queue_on_teleport indisponível: a continuidade no próximo servidor não está disponível.")
+end
+
+start()
+]==]
+
+loadstring(runner)(source, runner)
