@@ -1,0 +1,403 @@
+local runner = [====[
+local runner, resumeFarm = ...
+if not game:IsLoaded() then game.Loaded:Wait() end
+local Players = game:GetService('Players')
+local Http = game:GetService('HttpService')
+local TS = game:GetService('TeleportService')
+local UIS = game:GetService('UserInputService')
+local RunService = game:GetService('RunService')
+repeat task.wait() until Players.LocalPlayer
+local LP = Players.LocalPlayer
+local env = getgenv and getgenv() or _G
+if env.SlappleAutoController then env.SlappleAutoController.destroy() end
+local queue = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
+local alive, farm, bob = true, false, false
+local farmToken, bobToken = 0, 0
+local farmTasks, bobTasks, connections, bobConnections, hints = {}, {}, {}, {}, {}
+local teleporting, queued, lastServer = false, false, nil
+local retryAt = 0
+local rejected = {}
+
+local gui = Instance.new('ScreenGui')
+gui.Name = 'SlappleAutoHUD'
+gui.ResetOnSpawn = false
+gui.DisplayOrder = 100
+gui.Parent = LP:WaitForChild('PlayerGui')
+local frame = Instance.new('Frame')
+frame.Size = UDim2.fromOffset(310, 310)
+frame.Position = UDim2.new(0, 16, .5, -155)
+frame.BackgroundColor3 = Color3.fromRGB(25,27,34)
+frame.ClipsDescendants = true
+frame.Parent = gui
+local round = Instance.new('UICorner', frame)
+round.CornerRadius = UDim.new(0,12)
+local function label(text, y, h, size)
+    local v = Instance.new('TextLabel')
+    v.Size = UDim2.new(1,-24,0,h)
+    v.Position = UDim2.fromOffset(12,y)
+    v.BackgroundTransparency = 1
+    v.TextColor3 = Color3.fromRGB(235,235,245)
+    v.Font = Enum.Font.GothamMedium
+    v.TextSize = size or 14
+    v.TextWrapped = true
+    v.Text = text
+    v.Parent = frame
+    return v
+end
+local title = label('FARM HUB • arraste aqui',0,38,15)
+title.Active = true
+label('Slap Aura + Slapple + Candy + Server',45,28)
+local function button(text,y)
+    local v = Instance.new('TextButton')
+    v.Size = UDim2.new(1,-24,0,42)
+    v.Position = UDim2.fromOffset(12,y)
+    v.Text = text
+    v.TextColor3 = Color3.new(1,1,1)
+    v.Font = Enum.Font.GothamBold
+    v.TextSize = 14
+    v.BackgroundColor3 = Color3.fromRGB(40,160,95)
+    v.Parent = frame
+    Instance.new('UICorner',v).CornerRadius = UDim.new(0,9)
+    return v
+end
+local farmButton = button('ATIVAR',80)
+local bobButton = button('Get Bob',140)
+label('(Requires the Counter glove)',185,24,12)
+local status = label('Tudo desativado',220,76,13)
+local function connect(signal,fn,list)
+    local c = signal:Connect(fn)
+    table.insert(list or connections,c)
+    return c
+end
+local dragging, dragInput, dragStart, startPosition
+connect(title.InputBegan,function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging,dragInput,dragStart,startPosition = true,input,input.Position,frame.Position
+    end
+end)
+connect(UIS.InputChanged,function(input)
+    if not dragging then return end
+    if input == dragInput or (input.UserInputType == Enum.UserInputType.MouseMovement and dragInput.UserInputType == Enum.UserInputType.MouseButton1) then
+        local d = input.Position-dragStart
+        frame.Position = UDim2.new(startPosition.X.Scale,startPosition.X.Offset+d.X,startPosition.Y.Scale,startPosition.Y.Offset+d.Y)
+    end
+end)
+connect(UIS.InputEnded,function(input)
+    if input == dragInput then dragging,dragInput = false,nil end
+end)
+local function cancel(list)
+    for _,t in ipairs(list) do pcall(task.cancel,t) end
+    table.clear(list)
+end
+local function spawnInto(list,fn)
+    table.insert(list,task.spawn(fn))
+end
+local function refresh()
+    farmButton.Text = farm and 'STOP' or 'ATIVAR'
+    farmButton.BackgroundColor3 = farm and Color3.fromRGB(205,65,75) or Color3.fromRGB(40,160,95)
+    bobButton.Text = bob and 'Stop Bob' or 'Get Bob'
+    bobButton.BackgroundColor3 = bob and Color3.fromRGB(205,65,75) or Color3.fromRGB(55,105,180)
+end
+local function stopFarm()
+    farm = false
+    farmToken = farmToken+1
+    cancel(farmTasks)
+    refresh()
+end
+local function stopBob()
+    bob = false
+    bobToken = bobToken+1
+    cancel(bobTasks)
+    for _,c in ipairs(bobConnections) do c:Disconnect() end
+    table.clear(bobConnections)
+    for _,h in ipairs(hints) do h:Destroy() end
+    table.clear(hints)
+    refresh()
+end
+local function queueNext()
+    if queued or not queue then return end
+    queued = pcall(queue,string.format('loadstring(%q)(%q, %s)',runner,runner,tostring(farm)))
+end
+local function failed()
+    if lastServer then rejected[lastServer] = os.clock()+30; lastServer = nil end
+    teleporting = false
+    retryAt = os.clock()+.1
+    if farm then status.Text = 'Servidor indisponível • tentando outro' end
+end
+connect(LP.OnTeleport,function(state)
+    if state == Enum.TeleportState.Failed then failed(); return end
+    if farm or bob then teleporting = true; queueNext() end
+end)
+connect(TS.TeleportInitFailed,function(player)
+    if player == LP then failed() end
+end)
+
+local function startFarm()
+    if farm then return end
+    stopBob()
+    farm = true
+    farmToken = farmToken+1
+    local token = farmToken
+    local function active() return alive and farm and farmToken == token end
+    local started = os.clock()
+    local collected, searching, cursor = false,false,nil
+    local arenaStarted = false
+    local auraStarted = false
+    local candidates = {}
+    retryAt = 0
+    refresh()
+    local function search()
+        searching = true
+        spawnInto(farmTasks,function()
+            local url = 'https://games.roblox.com/v1/games/'..game.PlaceId..'/servers/Public?sortOrder=Desc&limit=100'
+            if cursor then url = url..'&cursor='..Http:UrlEncode(cursor) end
+            local ok,data = pcall(function() return Http:JSONDecode(game:HttpGetAsync(url)) end)
+            if not active() then return end
+            if ok and type(data) == 'table' and type(data.data) == 'table' then
+                for _,s in ipairs(data.data) do
+                    if type(s) == 'table' and type(s.id) == 'string' and type(s.playing) == 'number' and type(s.maxPlayers) == 'number' and s.playing < s.maxPlayers and s.id ~= game.JobId and (rejected[s.id] or 0) <= os.clock() then
+                        table.insert(candidates,s.id)
+                    end
+                end
+                local nextCursor = data.nextPageCursor
+                cursor = type(nextCursor) == 'string' and nextCursor ~= '' and nextCursor ~= cursor and nextCursor or nil
+            else cursor = nil end
+            searching = false
+            if #candidates == 0 then retryAt = os.clock()+.1 end
+        end)
+    end
+    spawnInto(farmTasks,function()
+        while active() do
+            local elapsed = os.clock()-started
+            if elapsed >= 1 and not arenaStarted then
+                arenaStarted = true
+                spawnInto(farmTasks,function()
+                    local ok,err = pcall(function()
+                        while active() do
+                            local character = LP.Character
+                            local root = character and character:FindFirstChild('HumanoidRootPart')
+                            if character and character:FindFirstChild('entered') then return end
+                            local lobby = workspace:FindFirstChild('Lobby')
+                            local portal = lobby and lobby:FindFirstChild('Teleport1')
+                            if root and portal then
+                                firetouchinterest(root,portal,0)
+                                firetouchinterest(root,portal,1)
+                            end
+                            task.wait(.1)
+                        end
+                    end)
+                    if not ok then warn('Arena: '..tostring(err)) end
+                end)
+            end
+            if elapsed >= 2 and not auraStarted then
+                auraStarted = true
+                spawnInto(farmTasks,function()
+                    -- GeneralHit comes from the supplied module's OtherGloves entry.
+                    -- Passing the target root is an integration assumption, not
+                    -- an argument signature established by that module.
+                    local storage = game:GetService('ReplicatedStorage')
+                    local warnedMissing = false
+                    while active() do
+                        if not teleporting then
+                            local remote = storage:FindFirstChild('GeneralHit')
+                            if remote and remote:IsA('RemoteEvent') then
+                                local ownCharacter = LP.Character
+                                local ownHumanoid = ownCharacter and ownCharacter:FindFirstChildWhichIsA('Humanoid')
+                                if ownCharacter and ownCharacter:FindFirstChild('entered') and ownHumanoid and ownHumanoid.Health > 0 then
+                                    for _,target in ipairs(Players:GetPlayers()) do
+                                        if not active() or teleporting then break end
+                                        if target ~= LP then
+                                            local character = target.Character
+                                            local root = character and character:FindFirstChild('HumanoidRootPart')
+                                            local humanoid = character and character:FindFirstChildWhichIsA('Humanoid')
+                                            if root and humanoid and humanoid.Health > 0 and character:FindFirstChild('entered') then
+                                                pcall(function() remote:FireServer(root) end)
+                                            end
+                                        end
+                                    end
+                                end
+                            elseif not warnedMissing then
+                                warnedMissing = true
+                                warn('Slap Aura: GeneralHit indisponível; Slapple, Candy e servidores continuam ativos.')
+                            end
+                        end
+                        task.wait(.25)
+                    end
+                end)
+            end
+            if elapsed >= 4.2 and not collected then
+                collected = true
+                spawnInto(farmTasks,function()
+                    local ok,err = pcall(function()
+                        repeat task.wait() until LP.Character and LP.Character:FindFirstChild('HumanoidRootPart')
+                        if not LP.Character:FindFirstChild('entered') then
+                            repeat
+                                task.wait()
+                                firetouchinterest(LP.Character.HumanoidRootPart,workspace.Lobby.Teleport1,0)
+                                firetouchinterest(LP.Character.HumanoidRootPart,workspace.Lobby.Teleport1,1)
+                            until LP.Character:FindFirstChild('entered')
+                        end
+                        for _,v in ipairs(workspace.Arena.island5.Slapples:GetDescendants()) do
+                            if v.Name == 'Glove' and v:FindFirstChildWhichIsA('TouchTransmitter') then
+                                firetouchinterest(LP.Character.HumanoidRootPart,v,0)
+                                firetouchinterest(LP.Character.HumanoidRootPart,v,1)
+                            end
+                        end
+                    end)
+                    if not ok then warn('Slapple: '..tostring(err)) end
+                end)
+                spawnInto(farmTasks,function()
+                    for _ = 1,10 do
+                        if not active() then return end
+                        local root = LP.Character and LP.Character:FindFirstChild('HumanoidRootPart')
+                        local candies = workspace:FindFirstChild('CandyCorns')
+                        if root and candies then
+                            for _,v in ipairs(candies:GetChildren()) do
+                                pcall(function()
+                                    if v:IsA('BasePart') then v.CFrame = root.CFrame
+                                    elseif v:IsA('Model') then v:PivotTo(root.CFrame) end
+                                end)
+                            end
+                        end
+                        task.wait()
+                    end
+                end)
+            end
+            if elapsed < 4.3 then
+                status.Text = string.format('Arena: %.1fs | Aura: %.1fs\nColeta: %.1fs | Server: %.1fs',math.max(0,1-elapsed),math.max(0,2-elapsed),math.max(0,4.2-elapsed),math.max(0,4.3-elapsed))
+            elseif not teleporting and os.clock() >= retryAt then
+                if #candidates > 0 then
+                    local id = table.remove(candidates,1)
+                    if (rejected[id] or 0) <= os.clock() then
+                        lastServer = id
+                        queueNext()
+                        teleporting = true
+                        status.Text = 'Entrando em outro servidor...'
+                        local ok = pcall(function() TS:TeleportToPlaceInstance(game.PlaceId,id,LP) end)
+                        if not ok then failed() end
+                    end
+                elseif not searching then status.Text = 'Buscando servidor com vaga...'; search() end
+            end
+            task.wait(.01)
+        end
+    end)
+end
+
+local function startBob()
+    if bob then return end
+    stopFarm()
+    bob = true
+    bobToken = bobToken+1
+    local token = bobToken
+    local function active() return alive and bob and bobToken == token end
+    refresh()
+    status.Text = 'Get Bob em execução...'
+    spawnInto(bobTasks,function()
+        local ok,err = pcall(function()
+            local LocalPlayer = LP
+            local Character = LocalPlayer.Character
+            assert(Character,'Personagem indisponível')
+            local HumanoidRootPart = Character.HumanoidRootPart
+            local Humanoid = Character.Humanoid
+
+            -- Compatibilidade por capacidade, sem filtrar nomes de executores.
+            local click = fireclickdetector
+            local validClick = type(click) == 'function'
+            if validClick then
+                local test = Instance.new('ClickDetector')
+                validClick = pcall(click,test,50,'MouseHoverEnter')
+                test:Destroy()
+            end
+            if not validClick then
+                -- Fix.lua usa RunService como global.
+                env.RunService = RunService
+                local fixes = loadstring(game:HttpGet('https://raw.githubusercontent.com/Articles-Hub/ROBLOXScript/refs/heads/main/SCRIPT/Fix.lua'))()
+                assert(fixes and type(fixes.fireclickdetector) == 'function','fireclickdetector indisponível')
+                click = fixes.fireclickdetector
+            end
+
+            local function SelectGlove(g)
+                repeat
+                    task.wait(.1)
+                    if not active() then return end
+                    click(workspace.Lobby[g]:FindFirstChildWhichIsA('ClickDetector',true))
+                until LocalPlayer.leaderstats.Glove.Value == g
+                task.wait(.1)
+            end
+            local function hint(text)
+                local h = Instance.new('Hint')
+                h.Parent = game:GetService('CoreGui')
+                h.Text = text
+                table.insert(hints,h)
+                return h
+            end
+            local msghint = hint('Getting ready... (1/4)')
+            if workspace:FindFirstChild('ÅBOB_'..LocalPlayer.Name) then
+                workspace['ÅBOB_'..LocalPlayer.Name]:Destroy()
+            end
+            spawnInto(bobTasks,function()
+                repeat
+                    task.wait()
+                    if not active() then return end
+                    HumanoidRootPart:PivotTo(CFrame.new(-125,-5,121))
+                    task.wait()
+                until Humanoid.Health == 0
+            end)
+            task.wait(2.5)
+            msghint.Text = 'Getting ready... (2/4)'
+            SelectGlove('Counter')
+            game:GetService('ReplicatedStorage').Counter:FireServer()
+            repeat task.wait() until Character.isInArena.Value == true
+            msghint.Text = 'Getting ready... (3/4)'
+            SelectGlove('Screwdriver')
+            game:GetService('ReplicatedStorage').GeneralAbility:FireServer()
+            task.wait(1)
+            msghint.Text = 'Getting ready... (4/4)'
+            SelectGlove('Replica')
+            msghint = hint('Waiting for bob... ( Just wait, can take 30+ seconds )')
+            connect(RunService.RenderStepped,function()
+                game:GetService('GuiService'):ClearError()
+                pcall(function() game:GetService('CoreGui').RobloxLoadingGUI:Destroy() end)
+            end,bobConnections)
+            for i = 1,200000 do
+                game:GetService('ReplicatedStorage').Duplicate:FireServer(true)
+            end
+            repeat task.wait() until workspace:FindFirstChild('ÅBOB_'..LocalPlayer.Name)
+            msghint.Text = 'Bob appeared. Rejoining to revert lags...'
+            task.wait(3)
+            while task.wait(.05) do
+                spawnInto(bobTasks,function()
+                    TS:TeleportToPlaceInstance(game.PlaceId,game.JobId,LocalPlayer)
+                end)
+            end
+        end)
+        if not ok and active() then
+            task.defer(function()
+                if not active() then return end
+                stopBob()
+                status.Text = 'Get Bob falhou: '..tostring(err)
+                warn(err)
+            end)
+        end
+    end)
+end
+connect(farmButton.Activated,function()
+    if farm then stopFarm(); status.Text = 'Tudo desativado' else startFarm() end
+end)
+connect(bobButton.Activated,function()
+    if bob then stopBob(); status.Text = 'Get Bob interrompido' else startBob() end
+end)
+local controller = {}
+controller.destroy = function()
+    stopFarm()
+    stopBob()
+    alive = false
+    for _,c in ipairs(connections) do c:Disconnect() end
+    gui:Destroy()
+end
+env.SlappleAutoController = controller
+refresh()
+if resumeFarm then startFarm() end
+if not queue then warn('queue_on_teleport indisponível: sem continuidade automática entre servidores.') end
+]====]
+loadstring(runner)(runner,false)
